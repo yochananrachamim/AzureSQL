@@ -1,3 +1,3 @@
 # AzureSQL
 
-Maintain Index and statistics
+Anything that is related to Azure SQL DB
