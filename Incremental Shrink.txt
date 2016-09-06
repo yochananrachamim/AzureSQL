@@ -1,0 +1,63 @@
+/***********************************************
+Incremental Shrink for data file - Azure SQL
+************************************************/
+set nocount on
+declare @CurrentFileSize int
+declare @DesiredFileSize int
+declare @ShrinkChunkSize int
+declare @ActualSizeMB int
+declare @ErrorIndication int
+declare @dbFileID int = 1
+declare @lastSize int
+declare @SqlCMD nvarchar(max)
+declare @MSG nvarchar(100)
+
+
+/*set this values for the current operation, size is in MB*/
+set @DesiredFileSize = 200000
+set @ShrinkChunkSize = 50
+
+
+select @CurrentFileSize = size/128 from sysfiles where fileid=@dbFileID
+select @ActualSizeMB = (sum(total_pages) / 128)  from sys.allocation_units
+
+set @msg = 'Current File Size: ' + cast(@CurrentFileSize as varchar(10)) + 'MB'
+raiserror(@msg,0,0) with nowait 
+set @msg = 'Actual used Size: ' + cast(@ActualSizeMB as varchar(10)) + 'MB'
+raiserror(@msg,0,0) with nowait
+set @msg = 'Desired File Size: ' + cast(@DesiredFileSize as varchar(10)) + 'MB'
+raiserror(@msg,0,0) with nowait
+set @msg = 'Interation shrink size: ' + cast(@ShrinkChunkSize as varchar(10)) + 'MB'
+raiserror(@msg,0,0) with nowait
+
+
+set @ErrorIndication = 
+	case 
+		when @DesiredFileSize > @CurrentFileSize then 1
+		when @ActualSizeMB > @DesiredFileSize then 2
+else 0 end
+
+
+
+if @ErrorIndication=1  raiserror('[Error] Desired size bigger than current size',0,0) with nowait
+if @ErrorIndication=2  raiserror('[Error] Actual size is bigger then desired size',0,0) with nowait
+if @ErrorIndication=0  raiserror('Desired Size check - OK',0,0) with nowait
+
+
+
+set @lastSize = @CurrentFileSize+1
+while @CurrentFileSize > @DesiredFileSize /*check if we got the desired size*/ and @lastSize>@CurrentFileSize /* check if there is progress*/ and @ErrorIndication=0
+begin 
+	set @msg = cast(getdate() as varchar(100)) + ' - Iteration starting'
+	raiserror(@msg,0,0) with nowait
+
+	select @lastSize = size/128 from sysfiles where fileid=@dbFileID
+	set @sqlCMD = 'dbcc shrinkfile('+cast(@dbFileID as varchar(7))+','+ cast(@CurrentFileSize-@ShrinkChunkSize as varchar(7)) +') with no_infomsgs;'
+	exec(@sqlCMD)
+	select @CurrentFileSize = size/128 from sysfiles where fileid=@dbFileID
+	
+	set @msg = cast(getdate() as varchar(100)) + ' - Iteration completed. current size is: ' + cast(@CurrentFileSize as varchar(10))
+	raiserror(@msg,0,0) with nowait
+end
+
+print 'Done'
