@@ -1,3 +1,7 @@
+/* Azure SQL Maintenance - Maintenance script for Azure SQL Database */
+/* This script provided AS IS, Please review the code before executing this on production environment */
+/* For any issue or suggestion please email to: yocr@microsoft.com */
+
 if object_id('AzureSQLMaintenance') is null
 	exec('create procedure AzureSQLMaintenance as /*dummy procedure body*/ select 1;')	
 GO
