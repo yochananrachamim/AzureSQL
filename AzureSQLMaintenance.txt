@@ -166,7 +166,7 @@ begin
 		/* create queue for update stats */
 		insert into #cmdQueue
 		select 
-		txtCMD = 'UPDATE STATISTICS [' + ObjectSchema + '].[' + ObjectName + '] WITH FULLSCAN;'
+		txtCMD = 'UPDATE STATISTICS [' + ObjectSchema + '].[' + ObjectName + '] (['+ StatsName +']) WITH FULLSCAN;'
 		from #statsBefore
 	end
 
