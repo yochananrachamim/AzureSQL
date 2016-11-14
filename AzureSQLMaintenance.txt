@@ -54,9 +54,10 @@ begin
 		raiserror('Get index information...(wait)',0,0) with nowait;
 		/* Get Index Information */
 		select 
-			[object_id]
+			i.[object_id]
 			,ObjectSchema = OBJECT_SCHEMA_NAME(i.object_id)
 			,ObjectName = object_name(i.object_id) 
+			,IndexName = idxs.name
 			,i.avg_fragmentation_in_percent
 			,i.page_count
 			,i.index_id
@@ -69,7 +70,10 @@ begin
 			,null as OnlineOpIsNotSupported
 		into #idxBefore
 		from sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,'limited') i
+		left join sys.indexes idxs on i.object_id = idxs.object_id and i.index_id = idxs.index_id
+		where idxs.type in (1/*Clustered index*/,2/*NonClustered index*/) /*Avoid HEAPS*/
 		order by i.avg_fragmentation_in_percent desc, page_count desc
+
 
 		-- mark indexes XML,spatial and columnstore not to run online update 
 		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where index_id >=1000)
@@ -97,20 +101,16 @@ begin
 			
 			
 			
-		
-		
-
-
 		/* create queue for update indexes */
 		insert into #cmdQueue
 		select 
 		txtCMD = 
 		case when avg_fragmentation_in_percent>5 and avg_fragmentation_in_percent<30 and @mode = 'smart' then
-			'ALTER INDEX ALL ON [' + ObjectSchema + '].[' + ObjectName + '] REORGANIZE;'
+			'ALTER INDEX [' + IndexName + '] ON [' + ObjectSchema + '].[' + ObjectName + '] REORGANIZE;'
 			when OnlineOpIsNotSupported=1 then
-			'ALTER INDEX ALL ON [' + ObjectSchema + '].[' + ObjectName + '] REBUILD WITH(ONLINE=OFF,MAXDOP=1);'
+			'ALTER INDEX [' + IndexName + '] ON [' + ObjectSchema + '].[' + ObjectName + '] REBUILD WITH(ONLINE=OFF,MAXDOP=1);'
 			else
-			'ALTER INDEX ALL ON [' + ObjectSchema + '].[' + ObjectName + '] REBUILD WITH(ONLINE=ON,MAXDOP=1);'
+			'ALTER INDEX [' + IndexName + '] ON [' + ObjectSchema + '].[' + ObjectName + '] REBUILD WITH(ONLINE=ON,MAXDOP=1);'
 		end
 		from #idxBefore
 		where 
