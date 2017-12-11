@@ -20,7 +20,7 @@ SELECT 
 [free space in MB] = (SUM(unallocated_extent_page_count)*1.0/128) 
 FROM tempdb.sys.dm_db_file_space_usage; 
 
-
+-- Get Allocations by session.
 ;with TempDBAlloc
 as
 (
@@ -38,6 +38,33 @@ select *
 from TempDBAlloc
 where tempdb_current_usage_MB>0
 order by tempdb_current_usage_MB desc
+
+
+-- get size for temp tables
+SELECT 
+    s.Name AS SchemaName,
+    t.NAME AS TableName,
+    p.rows AS RowCounts,
+    SUM(a.total_pages) * 8 AS TotalSpaceKB, 
+    SUM(a.used_pages) * 8 AS UsedSpaceKB, 
+    (SUM(a.total_pages) - SUM(a.used_pages)) * 8 AS UnusedSpaceKB
+FROM 
+    tempdb.sys.tables t
+INNER JOIN 
+    tempdb.sys.schemas s ON s.schema_id = t.schema_id
+INNER JOIN      
+    tempdb.sys.indexes i ON t.OBJECT_ID = i.object_id
+INNER JOIN 
+    tempdb.sys.partitions p ON i.object_id = p.OBJECT_ID AND i.index_id = p.index_id
+INNER JOIN 
+    tempdb.sys.allocation_units a ON p.partition_id = a.container_id
+WHERE 
+    t.NAME LIKE '#%'    -- filter out system tables for diagramming
+GROUP BY 
+    t.Name, s.Name, p.Rows
+ORDER BY 
+    s.Name, t.Name
+
 
 
 -- another option to monitor TemoDB usage is by using Adam Machanic WhoIsActive stored procedure.
