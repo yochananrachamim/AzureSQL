@@ -1,0 +1,47 @@
+-- get Database name
+select db_name() as DatabaseName
+
+-- Get SLO Level
+select * 
+from sys.database_service_objectives
+
+-- Get TempDB information current and max size
+SELECT 
+	FILE_ID,
+	type_desc,
+	SizeInMB = format(size*1.0/128,'#,###0'),
+	MaxSizeinMB = format(max_size*1.0/128,'#,##0')
+FROM tempdb.sys.database_files 
+
+
+-- From the current size, how much is used or free 
+SELECT 
+[used space in MB] = (SUM(allocated_extent_page_count)*1.0/128),
+[free space in MB] = (SUM(unallocated_extent_page_count)*1.0/128) 
+FROM tempdb.sys.dm_db_file_space_usage; 
+
+
+;with TempDBAlloc
+as
+(
+SELECT  
+		((user_objects_alloc_page_count-user_objects_dealloc_page_count) + (internal_objects_alloc_page_count-internal_objects_dealloc_page_count)) / 129 AS tempdb_current_usage_MB,
+		es.session_id, 
+		es.host_name,
+		es.program_name,
+		es.login_name,
+		es.last_request_end_time
+FROM sys.dm_db_session_space_usage ss
+	join sys.dm_exec_sessions es on es.session_id = ss.session_id
+)
+select * 
+from TempDBAlloc
+where tempdb_current_usage_MB>0
+order by tempdb_current_usage_MB desc
+
+
+-- another option to monitor TemoDB usage is by using Adam Machanic WhoIsActive stored procedure.
+-- http://dataeducation.com/sp_whoisactive-for-azure-sql-database-attempt-2/
+
+
+
