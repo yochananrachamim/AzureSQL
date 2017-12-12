@@ -71,6 +71,38 @@ from sys.dm_os_performance_counters
 where counter_name in('Log File(s) Size (KB)','Log File(s) Used Size (KB)')
 and instance_name='tempdb'
 
+-- Drill down to get information about log consumers
+select 
+	SS.session_id,
+	SS.host_name,
+	SS.program_name,
+	SS.login_name,
+	DBT.transaction_id, 
+	DBT.database_transaction_begin_time, 
+	database_transaction_type_desc = case DBT.database_transaction_type
+		when 1 then 'Read/write transaction'
+		when 2 then 'Read-only transaction'
+		when 3 then 'System transaction'
+	end,
+	database_transaction_state_desc = case DBT.database_transaction_state
+		when 1  then 'The transaction has not been initialized'
+		when 3  then 'The transaction has been initialized but has not generated any log records'
+		when 4  then 'The transaction has generated log records'
+		when 5  then 'The transaction has been prepared'
+		when 10 then 'The transaction has been committed'
+		when 11 then 'The transaction has been rolled back'
+		when 12 then 'The transaction is being committed. (The log record is being generated, but has not been materialized or persisted.'
+	end,
+	SST.open_transaction_count,
+	TotalLogSpaceReserved = format(1.0*(DBT.database_transaction_log_bytes_reserved+DBT.database_transaction_log_bytes_reserved_system)/1024/1024,'#,##0'),
+	database_transaction_log_bytes_used_MB = format(1.0*DBT.database_transaction_log_bytes_used/1024/1024,'#,##0'),
+	database_transaction_log_bytes_reserved_MB = format(1.0*DBT.database_transaction_log_bytes_reserved/1024/1024,'#,##0'),
+	database_transaction_log_bytes_used_system_MB = format(1.0*DBT.database_transaction_log_bytes_used_system/1024/1024,'#,##0'),
+	database_transaction_log_bytes_reserved_system_MB = format(1.0*DBT.database_transaction_log_bytes_reserved_system/1024/1024,'#,##0')
+From sys.dm_tran_database_transactions DBT
+	join sys.dm_tran_session_transactions SST on DBT.transaction_id = SST.transaction_id
+	join sys.dm_exec_sessions SS on SS.session_id = SST.session_id
+
 
 
 -- another option to monitor TemoDB usage is by using Adam Machanic WhoIsActive stored procedure.
