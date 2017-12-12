@@ -2,6 +2,17 @@
 /* This script provided AS IS, Please review the code before executing this on production environment */
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 
+
+/* 
+***********************************************
+	Current Version Date: 2017-12-12 
+***********************************************
+
+Change Log: 
+	2017-12-12: fix total indexes reported to the output window. functionality was not impacted by this issue.
+
+*/
+
 if object_id('AzureSQLMaintenance') is null
 	exec('create procedure AzureSQLMaintenance as /*dummy procedure body*/ select 1;')	
 GO
@@ -104,15 +115,15 @@ begin
 		raiserror('Index Information:',0,0) with nowait
 		raiserror('---------------------------------------',0,0) with nowait
 
-		select @msg = count(*) from #idxBefore where index_id in (1,2)
+		select @msg = count(*) from #idxBefore 
 		set @msg = 'Total Indexes: ' + @msg
 		raiserror(@msg,0,0) with nowait
 
-		select @msg = avg(avg_fragmentation_in_percent) from #idxBefore where index_id in (1,2) and page_count>@minPageCountForIndex
+		select @msg = avg(avg_fragmentation_in_percent) from #idxBefore where page_count>@minPageCountForIndex
 		set @msg = 'Average Fragmentation: ' + @msg
 		raiserror(@msg,0,0) with nowait
 
-		select @msg = sum(iif(avg_fragmentation_in_percent>=5 and page_count>@minPageCountForIndex,1,0)) from #idxBefore where index_id in (1,2)
+		select @msg = sum(iif(avg_fragmentation_in_percent>=5 and page_count>@minPageCountForIndex,1,0)) from #idxBefore 
 		set @msg = 'Fragmented Indexes: ' + @msg
 		raiserror(@msg,0,0) with nowait
 
