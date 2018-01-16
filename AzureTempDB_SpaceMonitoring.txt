@@ -1,11 +1,11 @@
--- get Database name
+-- (1) get Database name
 select db_name() as DatabaseName
 
--- Get SLO Level
+-- (2) Get SLO Level
 select * 
 from sys.database_service_objectives
 
--- Get TempDB information current and max size
+-- (3) Get TempDB information current and max size
 SELECT 
 	FILE_ID,
 	type_desc,
@@ -14,13 +14,14 @@ SELECT
 FROM tempdb.sys.database_files 
 
 
--- From the current size, how much is used or free 
-SELECT 
-[used space in MB] = (SUM(allocated_extent_page_count)*1.0/128),
-[free space in MB] = (SUM(unallocated_extent_page_count)*1.0/128) 
-FROM tempdb.sys.dm_db_file_space_usage; 
+-- (4) From the current size, how much is used or free 
+SELECT 
+[free space in MB]			= format((SUM(unallocated_extent_page_count)*1.0/128),'#,##0'), 
+[used space in MB]			= format((SUM(allocated_extent_page_count)*1.0/128),'#,##0'),
+[VersionStore space in MB]	= format((SUM(version_store_reserved_page_count)*1.0/128),'#,##0') 
+FROM tempdb.sys.dm_db_file_space_usage; 
 
--- Get Allocations by session.
+-- (5) Get Allocations by session.
 ;with TempDBAlloc
 as
 (
@@ -40,7 +41,7 @@ where tempdb_current_usage_MB>0
 order by tempdb_current_usage_MB desc
 
 
--- get size for temp tables
+-- (6) get size for temp tables
 SELECT 
     s.Name AS SchemaName,
     t.NAME AS TableName,
@@ -65,13 +66,13 @@ GROUP BY
 ORDER BY 
     s.Name, t.Name
 
--- Get Log file information
+-- (7) Get Log file information
 select counter_name,instance_name, SizeInMB=cntr_value/1024
 from sys.dm_os_performance_counters 
 where counter_name in('Log File(s) Size (KB)','Log File(s) Used Size (KB)')
 and instance_name='tempdb'
 
--- Drill down to get information about log consumers
+--(8) Drill down to get information about log consumers
 select 
 	SS.session_id,
 	SS.host_name,
@@ -106,7 +107,6 @@ From sys.dm_tran_database_transactions DBT
 
 
 -- another option to monitor TemoDB usage is by using Adam Machanic WhoIsActive stored procedure.
--- http://dataeducation.com/sp_whoisactive-for-azure-sql-database-attempt-2/
-
+-- http://whoisactive.com/
 
 
