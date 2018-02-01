@@ -1,3 +1,15 @@
+/*
+
+Updated: 2018-02-01
+
++ open new query window using SSMS.
++ paste this whole script. 
++ right click on the query windows and then 
+>> Results to -> Results to file
++ execute the query
++ select the file to keep the results.
+
+*/
 set nocount on
 --(0) - timestamp and metadata
 select sysdatetime()
@@ -6,6 +18,7 @@ select db_name() as DatabaseName
 -- Get SLO Level
 select * 
 from sys.database_service_objectives
+
 
 
 --(1)
@@ -19,13 +32,16 @@ select
 			,sp.rows RowCntWhenStatsTaken
 			,sp.rows_sampled
 			,sp.modification_counter
+			,pct_modified = format((1.0*sp.modification_counter / idx.rowcnt),'p')
+			,LastStatsUpdatedWith = iif(sp.rows_sampled=sp.rows,'FullScan','Partial')
 		from sys.stats s cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp 
 		join sys.objects o on s.object_id = o.object_id
 		left join sys.sysindexes idx on idx.id = s.object_id and idx.indid in (0,1)
-		where s.object_id>100 and o.schema_id!=4
-		order by sp.last_updated asc
+		where s.object_id>100 and o.schema_id!=4 /*sys*/ and idx.rowcnt>0
+		order by pct_modified desc
 
 
+		
 --(2)
 print '***Get fragmentation info for all indexes above a certain size in the current database'
 -- Note: This could take some time on a very large database
@@ -136,74 +152,74 @@ INNER JOIN [sys].[dm_db_missing_index_groups] ig WITH (NOLOCK)
 INNER JOIN [sys].[dm_db_missing_index_details] id WITH (NOLOCK)
     ON ig.[index_handle] = id.[index_handle]
 ORDER BY [IndexAdvantage] DESC
-OPTION (RECOMPILE); 
+OPTION (RECOMPILE); 
 
 
 -- (6)
 
 print '***Get Average Waits for Database';
 WITH [Waits] AS
-    (SELECT
-        [wait_type],
-        [wait_time_ms] / 1000.0 AS [WaitS],
-        ([wait_time_ms] - [signal_wait_time_ms]) / 1000.0 AS [ResourceS],
-        [signal_wait_time_ms] / 1000.0 AS [SignalS],
-        [waiting_tasks_count] AS [WaitCount],
-        100.0 * [wait_time_ms] / SUM ([wait_time_ms]) OVER() AS [Percentage],
-        ROW_NUMBER() OVER(ORDER BY [wait_time_ms] DESC) AS [RowNum]
-    FROM sys.dm_db_wait_stats
-    WHERE [wait_type] NOT IN (
-        N'BROKER_EVENTHANDLER',         N'BROKER_RECEIVE_WAITFOR',
-        N'BROKER_TASK_STOP',            N'BROKER_TO_FLUSH',
-        N'BROKER_TRANSMITTER',          N'CHECKPOINT_QUEUE',
-        N'CHKPT',                       N'CLR_AUTO_EVENT',
-        N'CLR_MANUAL_EVENT',            N'CLR_SEMAPHORE',
-        N'DBMIRROR_DBM_EVENT',          N'DBMIRROR_EVENTS_QUEUE',
-        N'DBMIRROR_WORKER_QUEUE',       N'DBMIRRORING_CMD',
-        N'DIRTY_PAGE_POLL',             N'DISPATCHER_QUEUE_SEMAPHORE',
-        N'EXECSYNC',                    N'FSAGENT',
-        N'FT_IFTS_SCHEDULER_IDLE_WAIT', N'FT_IFTSHC_MUTEX',
-        N'HADR_CLUSAPI_CALL',           N'HADR_FILESTREAM_IOMGR_IOCOMPLETION',
-        N'HADR_LOGCAPTURE_WAIT',        N'HADR_NOTIFICATION_DEQUEUE',
-        N'HADR_TIMER_TASK',             N'HADR_WORK_QUEUE',
-        N'KSOURCE_WAKEUP',              N'LAZYWRITER_SLEEP',
-        N'LOGMGR_QUEUE',                N'ONDEMAND_TASK_QUEUE',
-        N'PWAIT_ALL_COMPONENTS_INITIALIZED',
-        N'QDS_PERSIST_TASK_MAIN_LOOP_SLEEP',
-        N'QDS_CLEANUP_STALE_QUERIES_TASK_MAIN_LOOP_SLEEP',
-        N'REQUEST_FOR_DEADLOCK_SEARCH', N'RESOURCE_QUEUE',
-        N'SERVER_IDLE_CHECK',           N'SLEEP_BPOOL_FLUSH',
-        N'SLEEP_DBSTARTUP',             N'SLEEP_DCOMSTARTUP',
-        N'SLEEP_MASTERDBREADY',         N'SLEEP_MASTERMDREADY',
-        N'SLEEP_MASTERUPGRADED',        N'SLEEP_MSDBSTARTUP',
-        N'SLEEP_SYSTEMTASK',            N'SLEEP_TASK',
-        N'SLEEP_TEMPDBSTARTUP',         N'SNI_HTTP_ACCEPT',
-        N'SP_SERVER_DIAGNOSTICS_SLEEP', N'SQLTRACE_BUFFER_FLUSH',
-        N'SQLTRACE_INCREMENTAL_FLUSH_SLEEP',
-        N'SQLTRACE_WAIT_ENTRIES',       N'WAIT_FOR_RESULTS',
-        N'WAITFOR',                     N'WAITFOR_TASKSHUTDOWN',
-        N'WAIT_XTP_HOST_WAIT',          N'WAIT_XTP_OFFLINE_CKPT_NEW_LOG',
-        N'WAIT_XTP_CKPT_CLOSE',         N'XE_DISPATCHER_JOIN',
-        N'XE_DISPATCHER_WAIT',          N'XE_TIMER_EVENT')
-    )
+    (SELECT
+        [wait_type],
+        [wait_time_ms] / 1000.0 AS [WaitS],
+        ([wait_time_ms] - [signal_wait_time_ms]) / 1000.0 AS [ResourceS],
+        [signal_wait_time_ms] / 1000.0 AS [SignalS],
+        [waiting_tasks_count] AS [WaitCount],
+        100.0 * [wait_time_ms] / SUM ([wait_time_ms]) OVER() AS [Percentage],
+        ROW_NUMBER() OVER(ORDER BY [wait_time_ms] DESC) AS [RowNum]
+    FROM sys.dm_db_wait_stats
+    WHERE [wait_type] NOT IN (
+        N'BROKER_EVENTHANDLER',         N'BROKER_RECEIVE_WAITFOR',
+        N'BROKER_TASK_STOP',            N'BROKER_TO_FLUSH',
+        N'BROKER_TRANSMITTER',          N'CHECKPOINT_QUEUE',
+        N'CHKPT',                       N'CLR_AUTO_EVENT',
+        N'CLR_MANUAL_EVENT',            N'CLR_SEMAPHORE',
+        N'DBMIRROR_DBM_EVENT',          N'DBMIRROR_EVENTS_QUEUE',
+        N'DBMIRROR_WORKER_QUEUE',       N'DBMIRRORING_CMD',
+        N'DIRTY_PAGE_POLL',             N'DISPATCHER_QUEUE_SEMAPHORE',
+        N'EXECSYNC',                    N'FSAGENT',
+        N'FT_IFTS_SCHEDULER_IDLE_WAIT', N'FT_IFTSHC_MUTEX',
+        N'HADR_CLUSAPI_CALL',           N'HADR_FILESTREAM_IOMGR_IOCOMPLETION',
+        N'HADR_LOGCAPTURE_WAIT',        N'HADR_NOTIFICATION_DEQUEUE',
+        N'HADR_TIMER_TASK',             N'HADR_WORK_QUEUE',
+        N'KSOURCE_WAKEUP',              N'LAZYWRITER_SLEEP',
+        N'LOGMGR_QUEUE',                N'ONDEMAND_TASK_QUEUE',
+        N'PWAIT_ALL_COMPONENTS_INITIALIZED',
+        N'QDS_PERSIST_TASK_MAIN_LOOP_SLEEP',
+        N'QDS_CLEANUP_STALE_QUERIES_TASK_MAIN_LOOP_SLEEP',
+        N'REQUEST_FOR_DEADLOCK_SEARCH', N'RESOURCE_QUEUE',
+        N'SERVER_IDLE_CHECK',           N'SLEEP_BPOOL_FLUSH',
+        N'SLEEP_DBSTARTUP',             N'SLEEP_DCOMSTARTUP',
+        N'SLEEP_MASTERDBREADY',         N'SLEEP_MASTERMDREADY',
+        N'SLEEP_MASTERUPGRADED',        N'SLEEP_MSDBSTARTUP',
+        N'SLEEP_SYSTEMTASK',            N'SLEEP_TASK',
+        N'SLEEP_TEMPDBSTARTUP',         N'SNI_HTTP_ACCEPT',
+        N'SP_SERVER_DIAGNOSTICS_SLEEP', N'SQLTRACE_BUFFER_FLUSH',
+        N'SQLTRACE_INCREMENTAL_FLUSH_SLEEP',
+        N'SQLTRACE_WAIT_ENTRIES',       N'WAIT_FOR_RESULTS',
+        N'WAITFOR',                     N'WAITFOR_TASKSHUTDOWN',
+        N'WAIT_XTP_HOST_WAIT',          N'WAIT_XTP_OFFLINE_CKPT_NEW_LOG',
+        N'WAIT_XTP_CKPT_CLOSE',         N'XE_DISPATCHER_JOIN',
+        N'XE_DISPATCHER_WAIT',          N'XE_TIMER_EVENT')
+    )
 SELECT
-    [W1].[wait_type] AS [WaitType],
-    CAST ([W1].[WaitS] AS DECIMAL (16, 2)) AS [Wait_S],
-    CAST ([W1].[ResourceS] AS DECIMAL (16, 2)) AS [Resource_S],
-    CAST ([W1].[SignalS] AS DECIMAL (16, 2)) AS [Signal_S],
-    [W1].[WaitCount] AS [WaitCount],
-    CAST ([W1].[Percentage] AS DECIMAL (5, 2)) AS [Percentage],
-    CAST (([W1].[WaitS] / [W1].[WaitCount]) AS DECIMAL (16, 4)) AS [AvgWait_S],
-    CAST (([W1].[ResourceS] / [W1].[WaitCount]) AS DECIMAL (16, 4)) AS [AvgRes_S],
-    CAST (([W1].[SignalS] / [W1].[WaitCount]) AS DECIMAL (16, 4)) AS [AvgSig_S]
+    [W1].[wait_type] AS [WaitType],
+    CAST ([W1].[WaitS] AS DECIMAL (16, 2)) AS [Wait_S],
+    CAST ([W1].[ResourceS] AS DECIMAL (16, 2)) AS [Resource_S],
+    CAST ([W1].[SignalS] AS DECIMAL (16, 2)) AS [Signal_S],
+    [W1].[WaitCount] AS [WaitCount],
+    CAST ([W1].[Percentage] AS DECIMAL (5, 2)) AS [Percentage],
+    CAST (([W1].[WaitS] / [W1].[WaitCount]) AS DECIMAL (16, 4)) AS [AvgWait_S],
+    CAST (([W1].[ResourceS] / [W1].[WaitCount]) AS DECIMAL (16, 4)) AS [AvgRes_S],
+    CAST (([W1].[SignalS] / [W1].[WaitCount]) AS DECIMAL (16, 4)) AS [AvgSig_S]
 FROM [Waits] AS [W1]
 INNER JOIN [Waits] AS [W2]
-    ON [W2].[RowNum] <= [W1].[RowNum]
+    ON [W2].[RowNum] <= [W1].[RowNum]
 GROUP BY [W1].[RowNum], [W1].[wait_type], [W1].[WaitS],
-    [W1].[ResourceS], [W1].[SignalS], [W1].[WaitCount], [W1].[Percentage]
+    [W1].[ResourceS], [W1].[SignalS], [W1].[WaitCount], [W1].[Percentage]
 HAVING SUM ([W2].[Percentage]) - [W1].[Percentage] < 95; -- percentage threshold
 GO
- 
+ 
 
 --(7) - Currently active queries 
 print 'exec requests'
@@ -239,6 +255,19 @@ JOIN sys.sysprocesses pr
        ON ses.session_id = pr.spid
 CROSS APPLY sys.dm_exec_sql_text(pr.sql_handle) sql_text;
 
+--(10) - database properties
+print 'sys.databases'
+select * from sys.databases
+
+--(11) deadlocks
+;WITH CTE AS (
+    SELECT CAST(event_data AS XML)  AS [target_data_XML] 
+    FROM sys.fn_xe_telemetry_blob_target_read_file('dl', null, null, null)
+)
+SELECT target_data_XML.value('(/event/@timestamp)[1]', 'DateTime2') AS Timestamp,
+   target_data_XML.query('/event/data[@name=''xml_report'']/value/deadlock') AS deadlock_xml,
+   target_data_XML.query('/event/data[@name=''database_name'']/value').value('(/value)[1]', 'nvarchar(100)') AS db_name
+FROM CTE 
 
 --(0) - timestamp
 select sysdatetime()
