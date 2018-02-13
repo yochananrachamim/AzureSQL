@@ -1,6 +1,6 @@
 /*
 
-Updated: 2018-02-01
+Updated: 2018-02-13
 
 + open new query window using SSMS.
 + paste this whole script. 
@@ -13,12 +13,16 @@ Updated: 2018-02-01
 set nocount on
 --(0) - timestamp and metadata
 select sysdatetime()
+-- Get Server Name
+select @@servername
 -- get Database name
 select db_name() as DatabaseName
--- Get SLO Level
-select * 
-from sys.database_service_objectives
-
+-- Get SLO Level and size
+SELECT   
+    DATABASEPROPERTYEX(db_name(), 'Collation') AS Collation,  
+    DATABASEPROPERTYEX(db_name(), 'Edition') AS Edition,  
+    DATABASEPROPERTYEX(db_name(), 'ServiceObjective') AS ServiceObjective,  
+    DATABASEPROPERTYEX(db_name(), 'MaxSizeInBytes') AS MaxSizeInBytes
 
 
 --(1)
