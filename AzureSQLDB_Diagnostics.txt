@@ -264,7 +264,8 @@ print 'sys.databases'
 select * from sys.databases
 
 --(11) deadlocks
-;WITH CTE AS (
+SET QUOTED_IDENTIFIER ON;
+WITH CTE AS (
     SELECT CAST(event_data AS XML)  AS target_data_XML 
     FROM sys.fn_xe_telemetry_blob_target_read_file('dl', null, null, null)
 )
