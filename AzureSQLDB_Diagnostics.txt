@@ -239,19 +239,19 @@ select * from sys.dm_db_resource_stats
 --(9)
 print 'current blocking and running batches'
 SELECT
-       sql_text.[text],
-       locks.[resource_type],
-       locks.[resource_subtype],
-       locks.[resource_description],
-       locks.[resource_associated_entity_id],
-       locks.[request_mode],
-       locks.[request_status],
-       ses.[login_name],
-       ses.[original_login_name],
-       ses.[login_time],
-       ses.[host_name],
-       ses.[program_name],
-       ses.[last_request_start_time]
+       sql_text.text,
+       locks.resource_type,
+       locks.resource_subtype,
+       locks.resource_description,
+       locks.resource_associated_entity_id,
+       locks.request_mode,
+       locks.request_status,
+       ses.login_name,
+       ses.original_login_name,
+       ses.login_time,
+       ses.host_name,
+       ses.program_name,
+       ses.last_request_start_time
 FROM sys.dm_tran_locks locks
 JOIN sys.dm_exec_sessions ses
        ON locks.request_session_id = ses.session_id
@@ -265,7 +265,7 @@ select * from sys.databases
 
 --(11) deadlocks
 ;WITH CTE AS (
-    SELECT CAST(event_data AS XML)  AS [target_data_XML] 
+    SELECT CAST(event_data AS XML)  AS target_data_XML 
     FROM sys.fn_xe_telemetry_blob_target_read_file('dl', null, null, null)
 )
 SELECT target_data_XML.value('(/event/@timestamp)[1]', 'DateTime2') AS Timestamp,
