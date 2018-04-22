@@ -1,6 +1,6 @@
 /*
 
-Updated: 2018-02-13
+Updated: 2018-04-22
 
 + open new query window using SSMS.
 + paste this whole script. 
@@ -11,18 +11,24 @@ Updated: 2018-02-13
 
 */
 set nocount on
+
 --(0) - timestamp and metadata
+print '*** General information'
+print 'SysDateTime'
 select sysdatetime()
--- Get Server Name
+print 'ServerName'
 select @@servername
--- get Database name
+print 'DatabaseName'
 select db_name() as DatabaseName
+
 -- Get SLO Level and size
+print '*** Get SLO Level and size'
 SELECT   
     DATABASEPROPERTYEX(db_name(), 'Collation') AS Collation,  
     DATABASEPROPERTYEX(db_name(), 'Edition') AS Edition,  
     DATABASEPROPERTYEX(db_name(), 'ServiceObjective') AS ServiceObjective,  
-    DATABASEPROPERTYEX(db_name(), 'MaxSizeInBytes') AS MaxSizeInBytes
+    DATABASEPROPERTYEX(db_name(), 'MaxSizeInBytes') AS MaxSizeInBytes,
+    DATABASEPROPERTYEX(db_name(), 'IsParameterizationForced') AS Parameterization 
 
 
 --(1)
@@ -108,16 +114,13 @@ ORDER BY
     s.Name, t.Name
 
 go
-
+print 'sp_spaceused'
 sp_spaceused
 go
 
 
 -- (5)
-
-
 print '***missing indexes'
-
 SELECT 
      id.[object_id] AS [ObjectID]
     ,id.[statement] AS [FullyQualifiedObjectName]
@@ -226,18 +229,27 @@ GO
  
 
 --(7) - Currently active queries 
-print 'exec requests'
+print '*** exec requests'
 select * from sys.dm_exec_requests
 
-print 'exec sessions'
-select * from sys.dm_exec_sessions
+print '*** exec sessions'
+SELECT
+    c.session_id, c.net_transport, c.encrypt_option,
+    c.auth_scheme, s.host_name, s.program_name,
+    s.client_interface_name, s.login_name, s.nt_domain,
+    s.nt_user_name, s.original_login_name, c.connect_time,
+    s.login_time
+FROM sys.dm_exec_connections AS c
+JOIN sys.dm_exec_sessions AS s
+    ON c.session_id = s.session_id
+
 
 --(8) - db stats
-print 'content of dm_db_resource_stats'
+print '*** content of dm_db_resource_stats'
 select * from sys.dm_db_resource_stats
 
 --(9)
-print 'current blocking and running batches'
+print '*** current blocking and running batches'
 SELECT
        sql_text.text,
        locks.resource_type,
@@ -260,10 +272,11 @@ JOIN sys.sysprocesses pr
 CROSS APPLY sys.dm_exec_sql_text(pr.sql_handle) sql_text;
 
 --(10) - database properties
-print 'sys.databases'
+print '*** sys.databases'
 select * from sys.databases
 
 --(11) deadlocks
+print '*** deadlock'
 SET QUOTED_IDENTIFIER ON;
 WITH CTE AS (
     SELECT CAST(event_data AS XML)  AS target_data_XML 
@@ -273,6 +286,10 @@ SELECT target_data_XML.value('(/event/@timestamp)[1]', 'DateTime2') AS Timestamp
    target_data_XML.query('/event/data[@name=''xml_report'']/value/deadlock') AS deadlock_xml,
    target_data_XML.query('/event/data[@name=''database_name'']/value').value('(/value)[1]', 'nvarchar(100)') AS db_name
 FROM CTE 
+
+--(12)
+Print '*** database_scoped_configurations'
+select * from sys.database_scoped_configurations
 
 --(0) - timestamp
 select sysdatetime()
