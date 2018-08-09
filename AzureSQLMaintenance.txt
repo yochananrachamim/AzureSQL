@@ -5,12 +5,12 @@
 
 /* 
 ***********************************************
-	Current Version Date: 2017-12-12 
+	Current Version Date: 2018-08-09 
 ***********************************************
 
 Change Log: 
 	2017-12-12: fix total indexes reported to the output window. functionality was not impacted by this issue.
-
+	2018-08-09: add filter to skip update statistics if it updated by using index rebuild.
 */
 
 if object_id('AzureSQLMaintenance') is null
@@ -149,7 +149,6 @@ begin
 		where 
 			index_id>0 /*disable heaps*/ 
 			and index_id < 1000 /* disable XML indexes */
-			--
 			and 
 				(
 					page_count> @minPageCountForIndex and /* not small tables */
@@ -175,10 +174,20 @@ begin
 			,sp.modification_counter
 		into #statsBefore
 		from sys.stats s cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp 
-		where OBJECT_SCHEMA_NAME(s.object_id) != 'sys' and (sp.modification_counter>0 or @mode='dummy')
+		where OBJECT_SCHEMA_NAME(s.object_id) != 'sys' and /*Modified stats or Dummy mode*/(sp.modification_counter>0 or @mode='dummy')
 		order by sp.last_updated asc
 
-		
+		/*Remove statistics if it is handled by index rebuild / reorginize 
+		I am removing statistics based on existance on the index in the list because for indexes with <5% changes we do not apply
+		any action - therefore we might decide to update statistics */
+		if @operation = 'all'
+			delete _stats 
+			from #statsBefore _stats
+			join #idxBefore _idx
+			on _idx.ObjectSchema = _stats.ObjectSchema
+			and _idx.ObjectName = _stats.ObjectName
+			and _idx.IndexName = _stats.StatsName 
+				
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Statistics Information:',0,0) with nowait
 		raiserror('---------------------------------------',0,0) with nowait
@@ -193,9 +202,7 @@ begin
 				
 		raiserror('---------------------------------------',0,0) with nowait
 
-
-
-
+		
 		/* create queue for update stats */
 		insert into #cmdQueue
 		select 
@@ -219,7 +226,7 @@ if @operation in('statistics','index','all')
 			raiserror(@SQLCMD,0,0) with nowait
 			if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,@SQLCMD,@ExtraInfo,sysdatetime(),null,'Started')
 			begin try
-				exec(@SQLCMD)	
+				--exec(@SQLCMD)	
 				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = 'Succeeded' where id=SCOPE_IDENTITY()
 			end try
 			begin catch
