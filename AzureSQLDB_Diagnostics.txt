@@ -1,6 +1,6 @@
 /*
 
-Updated: 2018-04-22
+Updated: 2018-12-18
 
 + open new query window using SSMS.
 + paste this whole script. 
@@ -23,12 +23,12 @@ select db_name() as DatabaseName
 
 -- Get SLO Level and size
 print '*** Get SLO Level and size'
-SELECT   
-    DATABASEPROPERTYEX(db_name(), 'Collation') AS Collation,  
-    DATABASEPROPERTYEX(db_name(), 'Edition') AS Edition,  
-    DATABASEPROPERTYEX(db_name(), 'ServiceObjective') AS ServiceObjective,  
-    DATABASEPROPERTYEX(db_name(), 'MaxSizeInBytes') AS MaxSizeInBytes,
-    DATABASEPROPERTYEX(db_name(), 'IsParameterizationForced') AS Parameterization 
+SELECT   DATABASEPROPERTYEX(db_name(), 'Collation') AS Collation  
+SELECT   DATABASEPROPERTYEX(db_name(), 'Edition') AS Edition
+SELECT   DATABASEPROPERTYEX(db_name(), 'ServiceObjective') AS ServiceObjective
+SELECT   DATABASEPROPERTYEX(db_name(), 'MaxSizeInBytes') AS MaxSizeInBytes
+SELECT   DATABASEPROPERTYEX(db_name(), 'IsParameterizationForced') AS Parameterization 
+SELECT   @@version
 
 
 --(1)
@@ -48,7 +48,7 @@ select
 		join sys.objects o on s.object_id = o.object_id
 		left join sys.sysindexes idx on idx.id = s.object_id and idx.indid in (0,1)
 		where s.object_id>100 and o.schema_id!=4 /*sys*/ and idx.rowcnt>0
-		order by pct_modified desc
+		order by modification_counter desc
 
 
 		
@@ -115,7 +115,7 @@ ORDER BY
 
 go
 print 'sp_spaceused'
-sp_spaceused
+exec sp_spaceused
 go
 
 
