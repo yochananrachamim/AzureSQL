@@ -114,10 +114,9 @@ begin
 		
 		update #idxBefore set OnlineOpIsNotSupported=1  
 			where /* Editions that does not support online operation in case this has been used with on-prem server */
-				serverproperty('Edition') like '%Express%' 
-				or serverproperty('Edition') like '%Standard%' 
-				or serverproperty('Edition') like '%Web		
-		
+				convert(varchar(100),serverproperty('Edition')) like '%Express%' 
+				or convert(varchar(100),serverproperty('Edition')) like '%Standard%'
+				or convert(varchar(100),serverproperty('Edition')) like '%Web%'
 		
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Index Information:',0,0) with nowait
