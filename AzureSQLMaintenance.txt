@@ -5,11 +5,12 @@
 
 /* 
 ***********************************************
-	Current Version Date: 2017-12-12 
+	Current Version Date: 2019-02-06 
 ***********************************************
 
 Change Log: 
 	2017-12-12: fix total indexes reported to the output window. functionality was not impacted by this issue.
+	2019-02-06 - Add conditional online operation for on-prem editions such as standard edition that does not support online operation
 
 */
 
@@ -29,6 +30,7 @@ begin
 	declare @minPageCountForIndex int = 40;
 	declare @OperationTime datetime2 = sysdatetime();
 	declare @KeepXOperationInLog int =3;
+	declare @ScriptHasAnError int = 0; 
 
 	/* make sure parameters selected correctly */
 	set @operation = lower(@operation)
@@ -109,6 +111,12 @@ begin
 
 		-- mark indexes XML,spatial and columnstore not to run online update 
 		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where index_id >=1000)
+		
+		update #idxBefore set OnlineOpIsNotSupported=1  
+			where /* Editions that does not support online operation in case this has been used with on-prem server */
+				serverproperty('Edition') like '%Express%' 
+				or serverproperty('Edition') like '%Standard%' 
+				or serverproperty('Edition') like '%Web		
 		
 		
 		raiserror('---------------------------------------',0,0) with nowait
@@ -223,8 +231,10 @@ if @operation in('statistics','index','all')
 				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = 'Succeeded' where id=SCOPE_IDENTITY()
 			end try
 			begin catch
-				raiserror('cached',0,0) with nowait
-				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = 'FAILED : ' + CAST(ERROR_NUMBER() AS VARCHAR(50)) + ERROR_MESSAGE() where id=SCOPE_IDENTITY()
+				set @ScriptHasAnError=1;
+				set @msg = 'FAILED : ' + CAST(ERROR_NUMBER() AS VARCHAR(50)) + ERROR_MESSAGE();
+				raiserror(@msg,0,0) with nowait
+				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = @msg where id=SCOPE_IDENTITY()
 			end catch
 			delete from @T
 		end
