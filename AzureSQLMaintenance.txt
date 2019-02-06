@@ -10,8 +10,8 @@
 
 Change Log: 
 	2017-12-12: fix total indexes reported to the output window. functionality was not impacted by this issue.
-	2019-02-06 - Add conditional online operation for on-prem editions such as standard edition that does not support online operation
-
+	2019-02-06: disable online operations where its not supported by server edition
+				add report for failure when error occurs during executions
 */
 
 if object_id('AzureSQLMaintenance') is null
@@ -251,8 +251,9 @@ if @operation in('statistics','index','all')
 		insert into AzureSQLMaintenanceLog values(@OperationTime,null,cast(@@rowcount as varchar(100))+ ' rows purged from log table because number of operations to keep is set to: ' + cast( @KeepXOperationInLog as varchar(100)),sysdatetime(),sysdatetime(),'Cleanup Log Table')
 	end
 
-	raiserror('Done',0,0)
+	if @ScriptHasAnError=0 	raiserror('Done',0,0)
 	if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,null,null,sysdatetime(),sysdatetime(),'End of operation')
+	if @ScriptHasAnError=1 	raiserror('Script has errors - please review the log.',16,1)
 end
 GO
 print 'Execute AzureSQLMaintenance to get help' 
