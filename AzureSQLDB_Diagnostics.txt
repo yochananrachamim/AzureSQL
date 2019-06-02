@@ -44,6 +44,7 @@ select
 			,sp.modification_counter
 			,pct_modified = format((1.0*sp.modification_counter / idx.rowcnt),'p')
 			,LastStatsUpdatedWith = iif(sp.rows_sampled=sp.rows,'FullScan','Partial')
+			,'UPDATE STATISTICS ['+ OBJECT_SCHEMA_NAME(s.object_id) + '].[' + object_name(s.object_id)  + '](' + s.name + ') WITH FULLSCAN'
 		from sys.stats s cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp 
 		join sys.objects o on s.object_id = o.object_id
 		left join sys.sysindexes idx on idx.id = s.object_id and idx.indid in (0,1)
