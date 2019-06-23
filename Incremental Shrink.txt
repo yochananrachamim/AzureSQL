@@ -37,10 +37,14 @@ set @ErrorIndication =
 		when @ActualSizeMB > @DesiredFileSize then 2
 else 0 end
 
+-- check if there is paused resumable index operation on this DB
+-- existance of these types of operations block the shrink operation from reducing the file size
+if (SELECT count(*) FROM sys.index_resumable_operations)>0 set @ErrorIndication=3
 
 
-if @ErrorIndication=1  raiserror('[Error] Desired size bigger than current size',0,0) with nowait
-if @ErrorIndication=2  raiserror('[Error] Actual size is bigger then desired size',0,0) with nowait
+if @ErrorIndication=1  raiserror('[Error] Desired size bigger than current size',16,0) with nowait
+if @ErrorIndication=2  raiserror('[Error] Actual size is bigger then desired size',16,0) with nowait
+if @ErrorIndication=3  raiserror('[Error] Paused resumable index rebuild was detected, please abort or complete the operation before running shrink',16,0) with nowait
 if @ErrorIndication=0  raiserror('Desired Size check - OK',0,0) with nowait
 
 

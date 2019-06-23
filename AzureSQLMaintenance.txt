@@ -1,16 +1,16 @@
 /* Azure SQL Maintenance - Maintenance script for Azure SQL Database */
 /* This script provided AS IS, Please review the code before executing this on production environment */
 /* For any issue or suggestion please email to: yocr@microsoft.com */
-
-
 /* 
 ***********************************************
-	Current Version Date: 2018-08-09 
+	Current Version Date: 2019-02-06 
 ***********************************************
 
 Change Log: 
 	2017-12-12: fix total indexes reported to the output window. functionality was not impacted by this issue.
 	2018-08-09: add filter to skip update statistics if it updated by using index rebuild.
+	2019-02-06: disable online operations where its not supported by server edition
+				add report for failure when error occurs during executions
 */
 
 if object_id('AzureSQLMaintenance') is null
@@ -29,6 +29,7 @@ begin
 	declare @minPageCountForIndex int = 40;
 	declare @OperationTime datetime2 = sysdatetime();
 	declare @KeepXOperationInLog int =3;
+	declare @ScriptHasAnError int = 0; 
 
 	/* make sure parameters selected correctly */
 	set @operation = lower(@operation)
@@ -110,6 +111,11 @@ begin
 		-- mark indexes XML,spatial and columnstore not to run online update 
 		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where index_id >=1000)
 		
+		update #idxBefore set OnlineOpIsNotSupported=1  
+			where /* Editions that does not support online operation in case this has been used with on-prem server */
+				convert(varchar(100),serverproperty('Edition')) like '%Express%' 
+				or convert(varchar(100),serverproperty('Edition')) like '%Standard%'
+				or convert(varchar(100),serverproperty('Edition')) like '%Web%'
 		
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Index Information:',0,0) with nowait
@@ -230,8 +236,10 @@ if @operation in('statistics','index','all')
 				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = 'Succeeded' where id=SCOPE_IDENTITY()
 			end try
 			begin catch
-				raiserror('cached',0,0) with nowait
-				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = 'FAILED : ' + CAST(ERROR_NUMBER() AS VARCHAR(50)) + ERROR_MESSAGE() where id=SCOPE_IDENTITY()
+				set @ScriptHasAnError=1;
+				set @msg = 'FAILED : ' + CAST(ERROR_NUMBER() AS VARCHAR(50)) + ERROR_MESSAGE();
+				raiserror(@msg,0,0) with nowait
+				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = @msg where id=SCOPE_IDENTITY()
 			end catch
 			delete from @T
 		end
@@ -248,8 +256,9 @@ if @operation in('statistics','index','all')
 		insert into AzureSQLMaintenanceLog values(@OperationTime,null,cast(@@rowcount as varchar(100))+ ' rows purged from log table because number of operations to keep is set to: ' + cast( @KeepXOperationInLog as varchar(100)),sysdatetime(),sysdatetime(),'Cleanup Log Table')
 	end
 
-	raiserror('Done',0,0)
+	if @ScriptHasAnError=0 	raiserror('Done',0,0)
 	if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,null,null,sysdatetime(),sysdatetime(),'End of operation')
+	if @ScriptHasAnError=1 	raiserror('Script has errors - please review the log.',16,1)
 end
 GO
 print 'Execute AzureSQLMaintenance to get help' 
