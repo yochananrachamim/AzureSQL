@@ -3,7 +3,7 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2019-02-06 
+	Current Version Date: 2019-06-24 
 ***********************************************
 
 Change Log: 
@@ -11,6 +11,8 @@ Change Log:
 	2018-08-09: add filter to skip update statistics if it updated by using index rebuild.
 	2019-02-06: disable online operations where its not supported by server edition
 				add report for failure when error occurs during executions
+	2019-06-24: avoid running online operation when text/ntext or image file type used in the table
+			+ avoid rebuild twice when lob data exists due to duplicate row in index phisical stats dmv.
 */
 
 if object_id('AzureSQLMaintenance') is null
@@ -105,12 +107,23 @@ begin
 		from sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,'limited') i
 		left join sys.indexes idxs on i.object_id = idxs.object_id and i.index_id = idxs.index_id
 		where idxs.type in (1/*Clustered index*/,2/*NonClustered index*/) /*Avoid HEAPS*/
+		and alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/
 		order by i.avg_fragmentation_in_percent desc, page_count desc
 
 
+		
 		-- mark indexes XML,spatial and columnstore not to run online update 
 		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where index_id >=1000)
-		
+
+		-- mark clustered indexes for tables with 'text','ntext','image' to rebuild offline
+		update #idxBefore set OnlineOpIsNotSupported=1 
+		where index_id=1 /*clustered*/ and [object_id] in (
+			select object_id
+			from sys.columns c join sys.types t on c.user_type_id = t.user_type_id
+			where t.name in ('text','ntext','image')
+		)
+	
+		-- do all as offline for box edition that does not support online
 		update #idxBefore set OnlineOpIsNotSupported=1  
 			where /* Editions that does not support online operation in case this has been used with on-prem server */
 				convert(varchar(100),serverproperty('Edition')) like '%Express%' 
@@ -153,9 +166,6 @@ begin
 		, ExtraInfo = 'Current fragmentation: ' + format(avg_fragmentation_in_percent/100,'p')
 		from #idxBefore
 		where 
-			index_id>0 /*disable heaps*/ 
-			and index_id < 1000 /* disable XML indexes */
-			and 
 				(
 					page_count> @minPageCountForIndex and /* not small tables */
 					avg_fragmentation_in_percent>=5
@@ -232,7 +242,7 @@ if @operation in('statistics','index','all')
 			raiserror(@SQLCMD,0,0) with nowait
 			if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,@SQLCMD,@ExtraInfo,sysdatetime(),null,'Started')
 			begin try
-				--exec(@SQLCMD)	
+				exec(@SQLCMD)	
 				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = 'Succeeded' where id=SCOPE_IDENTITY()
 			end try
 			begin catch
