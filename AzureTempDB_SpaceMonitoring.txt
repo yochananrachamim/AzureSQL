@@ -73,7 +73,9 @@ where counter_name in('Log File(s) Size (KB)','Log File(s) Used Size (KB)')
 and instance_name='tempdb'
 
 --(8) Drill down to get information about log consumers
-select 
+with CTE as
+(select 
+	DBT.database_id,
 	SS.session_id,
 	SS.host_name,
 	SS.program_name,
@@ -100,10 +102,27 @@ select
 	database_transaction_log_bytes_reserved_MB = format(1.0*DBT.database_transaction_log_bytes_reserved/1024/1024,'#,##0'),
 	database_transaction_log_bytes_used_system_MB = format(1.0*DBT.database_transaction_log_bytes_used_system/1024/1024,'#,##0'),
 	database_transaction_log_bytes_reserved_system_MB = format(1.0*DBT.database_transaction_log_bytes_reserved_system/1024/1024,'#,##0')
-From sys.dm_tran_database_transactions DBT
-	join sys.dm_tran_session_transactions SST on DBT.transaction_id = SST.transaction_id
-	join sys.dm_exec_sessions SS on SS.session_id = SST.session_id
-
+From tempdb.sys.dm_tran_database_transactions DBT
+	 left join tempdb.sys.dm_tran_session_transactions SST on DBT.transaction_id = SST.transaction_id
+	 left join tempdb.sys.dm_exec_sessions SS on SS.session_id = SST.session_id
+)
+select
+	database_id, 
+	session_id, 
+	host_name, 
+	program_name, 
+	transaction_id,
+	database_transaction_begin_time,
+	database_transaction_type_desc,
+	database_transaction_state_desc,
+	TotalLogSpaceReserved,
+	database_transaction_log_bytes_used_MB,
+	database_transaction_log_bytes_reserved_MB ,
+	database_transaction_log_bytes_used_system_MB,
+	database_transaction_log_bytes_reserved_system_MB	
+	from CTE 
+	where transaction_id in (select transaction_id from CTE where TotalLogSpaceReserved>0)
+-- in case of using elastic pool you may switch to master and query for the database name of the database ID returned by this query
 
 
 -- another option to monitor TemoDB usage is by using Adam Machanic WhoIsActive stored procedure.
