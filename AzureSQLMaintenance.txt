@@ -12,6 +12,7 @@ Change Log:
 	2019-02-06: disable online operations where its not supported by server edition
 				add report for failure when error occurs during executions
 	2019-06-24: avoid running online operation when text/ntext or image file type used in the table
+			special thanks for Haden Kingsland (@theflyingdba) for sharing the code change for these types.
 			+ avoid rebuild twice when lob data exists due to duplicate row in index phisical stats dmv.
 */
 
