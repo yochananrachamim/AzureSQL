@@ -1,3 +1,4 @@
-# AzureSQL
+# Uniper Azure DB Maintenance
 
-Anything that is related to Azure SQL DB
+The procedure AzureSQLMaintenance.txt is used for automated runbooks created in the https://github.com/uniper/uniper-terraform
+repository. 
