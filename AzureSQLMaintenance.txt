@@ -27,6 +27,7 @@ ALTER Procedure [dbo].[AzureSQLMaintenance]
 	(
 		@operation nvarchar(10) = null,
 		@mode nvarchar(10) = 'smart',
+		@ResumableIndexRebuild bit = 0,
 		@LogToTable bit = 0,
 		@debug nvarchar = 'none'
 	)
@@ -43,6 +44,7 @@ begin
 	declare @OperationTime datetime2 = sysdatetime();
 	declare @KeepXOperationInLog int =3;
 	declare @ScriptHasAnError int = 0; 
+	declare @ResumableIndexRebuildSupported int;
 
 	/* make sure parameters selected correctly */
 	set @operation = lower(@operation)
@@ -64,6 +66,11 @@ begin
 		raiserror(' optionaly you can supply second parameter for operation mode: ',0,0)
 		raiserror('     "smart" (Default) using smart decition about what index or stats should be touched.',0,0)
 		raiserror('     "dummy" going through all indexes and statistics regardless thier modifications or fragmentation.',0,0)
+		raiserror(' ',0,0)
+		raiserror('@ResumableIndexRebuild(bit) [optional]',0,0)
+		raiserror(' optionaly you can choose to rebuild indexes as resumable operation: ',0,0)
+		raiserror('     "0" (Default) using non resumable index rebuild.',0,0)
+		raiserror('     "1" using resumable index rebuild when it is supported.',0,0)
 		raiserror(' ',0,0)
 		raiserror('@LogToTable(bit) [optional]',0,0)
 		raiserror(' Logging option: @LogToTable(bit)',0,0)
@@ -97,6 +104,7 @@ begin
 				select top 1
 				@LogToTable = JSON_VALUE(ExtraInfo,'$.LogToTable')
 				,@mode = JSON_VALUE(ExtraInfo,'$.mode')
+				,@ResumableIndexRebuild = JSON_VALUE(ExtraInfo,'$.ResumableIndexRebuild')
 				from AzureSQLMaintenanceCMDQueue 
 				where ID=-1
 				
@@ -118,6 +126,8 @@ begin
 		raiserror(@msg,0,0)
 		set @msg = 'set mode = ' + @mode;
 		raiserror(@msg,0,0)
+		set @msg = 'set ResumableIndexRebuild = ' + cast(@ResumableIndexRebuild as varchar(1));
+		raiserror(@msg,0,0)
 		set @msg = 'set LogToTable = ' + cast(@LogToTable as varchar(1));
 		raiserror(@msg,0,0)
 		raiserror('-----------------------',0,0)
@@ -128,6 +138,21 @@ begin
 	-- create command queue table, if there table exits then we resume operation in earlier stage.
 	if @operation!='resume'
 		create table AzureSQLMaintenanceCMDQueue (ID int identity primary key,txtCMD nvarchar(max),ExtraInfo varchar(max))
+
+	if @ResumableIndexRebuild=1 
+	begin
+		if cast(SERVERPROPERTY('EngineEdition')as int)>=5 or cast(SERVERPROPERTY('ProductMajorVersion')as int)>=14
+		begin
+			set @ResumableIndexRebuildSupported=1;
+		end
+		else
+		begin 
+				set @ResumableIndexRebuildSupported=0;
+				set @msg = 'Resumable index rebuild is not supported on this database'
+				raiserror(@msg,0,0)
+				if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,null,null,sysdatetime(),sysdatetime(),@msg)	
+		end
+	end
 
 	if @operation in('index','all')
 	begin
@@ -149,6 +174,7 @@ begin
 			,i.ghost_record_count
 			,i.forwarded_record_count
 			,null as OnlineOpIsNotSupported
+			,null as ObjectDoesNotSupportResumableOperation
 			,0 as SkipIndex
 			,replicate('',128) as SkipReason
 		into #idxBefore
@@ -157,9 +183,9 @@ begin
 		where idxs.type in (1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) /*Avoid HEAPS*/
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
+		and idxs.is_disabled=0
 		order by i.avg_fragmentation_in_percent desc, i.page_count desc
-		
-		
+				
 		-- mark indexes XML,spatial and columnstore not to run online update 
 		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where [type]=3 /*XML Indexes*/)
 
@@ -177,6 +203,12 @@ begin
 				convert(varchar(100),serverproperty('Edition')) like '%Express%' 
 				or convert(varchar(100),serverproperty('Edition')) like '%Standard%'
 				or convert(varchar(100),serverproperty('Edition')) like '%Web%'
+		
+		-- Do non resumable operation when index contains computed column or timestamp data type
+		update idx set ObjectDoesNotSupportResumableOperation=1
+		from #idxBefore idx join sys.index_columns ic on idx.object_id = ic.object_id and idx.index_id=ic.index_id
+		join sys.columns c on ic.object_id=c.object_id and ic.column_id=c.column_id
+		where c.is_computed=1 or system_type_id=189 /*TimeStamp column*/
 		
 		-- set SkipIndex=1 if conditions are not met
 		-- this is used to idntify is stats need to be updated or not. 
@@ -254,8 +286,10 @@ begin
 			 'REORGANIZE;'
 			when OnlineOpIsNotSupported=1 then
 			'REBUILD WITH(ONLINE=OFF,MAXDOP=1);'
-			else
+			when ObjectDoesNotSupportResumableOperation=1 or @ResumableIndexRebuildSupported=0 or @ResumableIndexRebuild=0 then
 			'REBUILD WITH(ONLINE=ON,MAXDOP=1);'
+			else
+			'REBUILD WITH(ONLINE=ON,MAXDOP=1, RESUMABLE=ON);'
 		end
 		, ExtraInfo = 
 			case when type in (5,6) then
@@ -274,6 +308,8 @@ begin
 		select 
 			ObjectSchema = OBJECT_SCHEMA_NAME(s.object_id)
 			,ObjectName = object_name(s.object_id) 
+			,s.object_id
+			,s.stats_id
 			,StatsName = s.name
 			,sp.last_updated
 			,sp.rows
@@ -303,7 +339,14 @@ begin
 		/*Skip statistics for Columnstore indexes*/
 		update #statsBefore set SkipStatistics=1
 		where type in (5,6) /*Column store indexes*/
-					   
+
+		/*Skip statistics if resumable operation is pause on the same object*/
+		if @ResumableIndexRebuildSupported=1
+		begin
+			update _stats set SkipStatistics=1
+			from #statsBefore _stats join sys.index_resumable_operations iro on _stats.object_id=iro.object_id and _stats.stats_id=iro.index_id
+		end
+		
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Statistics Information:',0,0) with nowait
 		raiserror('---------------------------------------',0,0) with nowait
@@ -366,7 +409,7 @@ begin
 		/*Save current execution parameters in case resume is needed */
 		if @operation!='resume'
 		begin
-			set @ExtraInfo = (select top 1 LogToTable = @LogToTable, operation=@operation, operationTime=@OperationTime, mode=@mode from sys.tables for JSON path, WITHOUT_ARRAY_WRAPPER)
+			set @ExtraInfo = (select top 1 LogToTable = @LogToTable, operation=@operation, operationTime=@OperationTime, mode=@mode, ResumableIndexRebuild = @ResumableIndexRebuild from sys.tables for JSON path, WITHOUT_ARRAY_WRAPPER)
 			set identity_insert AzureSQLMaintenanceCMDQueue on
 			insert into AzureSQLMaintenanceCMDQueue(ID,txtCMD,ExtraInfo) values(-1,'parameters to be used by resume code path',@ExtraInfo)
 			set identity_insert AzureSQLMaintenanceCMDQueue off
@@ -423,7 +466,7 @@ Examples
 exec  AzureSQLMaintenance 'all'
 
 1.1 add log to table
-exec  AzureSQLMaintenance 'all', @LogToTable=1
+exec  AzureSQLMaintenance 'all', @LogToTable=1, @ResumableIndexRebuild=1
 
 
 2. run through all indexes and statistic with no limitation (event non modified object will be rebuild or updated)
