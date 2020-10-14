@@ -19,7 +19,7 @@ Change Log:
 			+ Fix issue #4 - System Generated Index Names are Causing syntax issues
 			+ support for resumable index rebuild
 			+ add resume support for maintenance operation
-			+ 
+			+ add support for rebuilding heaps as optional parameter
 */
 
 if object_id('AzureSQLMaintenance') is null
