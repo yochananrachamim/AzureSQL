@@ -1,0 +1,38 @@
+#select * from sys.database_query_store_options
+#select * from sys.query_store_plan
+#select * from sys.query_store_query
+#select * from sys.query_store_query_hints
+#select * from sys.query_store_query_text
+#select * from sys.query_store_runtime_stats
+#select * from sys.query_store_runtime_stats
+#select * from sys.query_store_runtime_stats_interval
+#select * from sys.query_store_wait_stats
+
+$ServerName = "yochanan.database.windows.net"
+$DatabaseName = "AdventureWorks"
+$UserName = "yochanan"
+$Password = "P@ssw0rd"
+
+$TableName = "database_query_store_options"
+
+function Export-Table
+{
+    param($TableName)
+
+    $SchemaName = "sys"
+
+    $AllArgs = @($SchemaName+"."+$TableName, "out", $env:TEMP+"\"+$TableName+".dat", "-S "+$ServerName, "-d "+$DatabaseName, "-U "+$UserName, "-P "+$Password, "-c" )
+      
+    &'cmd ' $AllArgs
+
+    
+    & BCP $SchemaName+"."+$TableName Format nul -S $ServerName -d $DatabaseName -U $UserName -P $Password -c -x -f $env:TEMP+"\"+$TableName +".xml"
+        
+}
+
+Export-Table "database_query_store_options"
+
+
+#BCP sys.database_query_store_options out database_query_store_options.dat -S yochanan.database.windows.net -d AdventureWorks -U yochanan -P P@ssw0rd -c
+#BCP sys.database_query_store_options Format nul -S yochanan.database.windows.net -d AdventureWorks -U yochanan -P P@ssw0rd -c -x -f database_query_store_options.xml
+#BCP database_query_store_options in c:\Temp\database_query_store_options.dat -S home -T -d AdventureWorks2012 -f c:\Temp\database_query_store_options.xml
