@@ -3,7 +3,7 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2019-06-24 
+	Current Version Date: 2020-10-14 
 ***********************************************
 
 Change Log: 
@@ -14,10 +14,12 @@ Change Log:
 	2019-06-24: avoid running online operation when text/ntext or image file type used in the table
 			special thanks for Haden Kingsland (@theflyingdba) for sharing the code change for these types.
 			+ avoid rebuild twice when lob data exists due to duplicate row in index phisical stats dmv.
-	2020-10-12
+	2020-10-14
 			+ Fix issue #11 - Out of date stats aren't always updated
 			+ Fix issue #4 - System Generated Index Names are Causing syntax issues
-
+			+ support for resumable index rebuild
+			+ add resume support for maintenance operation
+			+ 
 */
 
 if object_id('AzureSQLMaintenance') is null
@@ -28,6 +30,7 @@ ALTER Procedure [dbo].[AzureSQLMaintenance]
 		@operation nvarchar(10) = null,
 		@mode nvarchar(10) = 'smart',
 		@ResumableIndexRebuild bit = 0,
+		@RebuildHeaps bit = 0,
 		@LogToTable bit = 0,
 		@debug nvarchar = 'none'
 	)
@@ -35,6 +38,10 @@ as
 begin
 	set nocount on;
 	
+	---------------------------------------------
+	--- Varialbles and pre conditions check
+	---------------------------------------------
+
 	set quoted_identifier on;
 	declare @idxIdentifierBegin char(1), @idxIdentifierEnd char(1);
 	declare @statsIdentifierBegin char(1), @statsIdentifierEnd char(1);
@@ -53,6 +60,10 @@ begin
 	
 	if @mode not in ('smart','dummy')
 		set @mode = 'smart'
+
+	---------------------------------------------
+	--- Begin
+	---------------------------------------------
 
 	if @operation not in ('index','statistics','all') or @operation is null
 	begin
@@ -73,6 +84,11 @@ begin
 		raiserror('     "1" using resumable index rebuild when it is supported.',0,0)
 		raiserror(' ',0,0)
 		raiserror('@LogToTable(bit) [optional]',0,0)
+		raiserror(' Rebuild HEAPS to fix forwarded records issue on tables with no clustered index',0,0)
+		raiserror('     0 - (Default) do not rebuild heaps',0,0)
+		raiserror('     1 - Rebuild heaps based on @mode parameter, @mode=dummy will rebuild all heaps',0,0)
+		raiserror(' ',0,0)
+		raiserror('@RebuildHeaps(bit) [optional]',0,0)
 		raiserror(' Logging option: @LogToTable(bit)',0,0)
 		raiserror('     0 - (Default) do not log operation to table',0,0)
 		raiserror('     1 - log operation to table',0,0)
@@ -81,15 +97,24 @@ begin
 		raiserror(' ',0,0)
 		raiserror('Example:',0,0)
 		raiserror('		exec  AzureSQLMaintenance ''all'', @LogToTable=1',0,0)
+
 	end
 	else 
 	begin
 		
+		---------------------------------------------
+		--- Prepare log table
+		---------------------------------------------
+
 		/* Prepare Log Table */
 		if object_id('AzureSQLMaintenanceLog') is null and @LogToTable=1
 		begin
 			create table AzureSQLMaintenanceLog (id bigint primary key identity(1,1), OperationTime datetime2, command varchar(4000),ExtraInfo varchar(4000), StartTime datetime2, EndTime datetime2, StatusMessage varchar(1000));
 		end
+
+		---------------------------------------------
+		--- Resume operation
+		---------------------------------------------
 
 		/*Check is there is operation to resume*/
 		if OBJECT_ID('AzureSQLMaintenanceCMDQueue') is not null 
@@ -120,6 +145,11 @@ begin
 				end
 		end
 
+
+		---------------------------------------------
+		--- Report operation parameters
+		---------------------------------------------
+		
 		/*Write operation parameters*/
 		raiserror('-----------------------',0,0)
 		set @msg = 'set operation = ' + @operation;
@@ -127,6 +157,8 @@ begin
 		set @msg = 'set mode = ' + @mode;
 		raiserror(@msg,0,0)
 		set @msg = 'set ResumableIndexRebuild = ' + cast(@ResumableIndexRebuild as varchar(1));
+		raiserror(@msg,0,0)
+		set @msg = 'set RebuildHeaps = ' + cast(@RebuildHeaps as varchar(1));
 		raiserror(@msg,0,0)
 		set @msg = 'set LogToTable = ' + cast(@LogToTable as varchar(1));
 		raiserror(@msg,0,0)
@@ -139,6 +171,9 @@ begin
 	if @operation!='resume'
 		create table AzureSQLMaintenanceCMDQueue (ID int identity primary key,txtCMD nvarchar(max),ExtraInfo varchar(max))
 
+	---------------------------------------------
+	--- Check if engine support resumable index operation
+	---------------------------------------------
 	if @ResumableIndexRebuild=1 
 	begin
 		if cast(SERVERPROPERTY('EngineEdition')as int)>=5 or cast(SERVERPROPERTY('ProductMajorVersion')as int)>=14
@@ -154,6 +189,10 @@ begin
 		end
 	end
 
+
+	---------------------------------------------
+	--- Index maintenance
+	---------------------------------------------
 	if @operation in('index','all')
 	begin
 		raiserror('Get index information...(wait)',0,0) with nowait;
@@ -179,8 +218,8 @@ begin
 			,replicate('',128) as SkipReason
 		into #idxBefore
 		from sys.indexes idxs
-		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,'limited') i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
-		where idxs.type in (1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) /*Avoid HEAPS*/
+		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,'SAMPLED') i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
+		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
 		and idxs.is_disabled=0
@@ -210,7 +249,7 @@ begin
 		join sys.columns c on ic.object_id=c.object_id and ic.column_id=c.column_id
 		where c.is_computed=1 or system_type_id=189 /*TimeStamp column*/
 		
-		-- set SkipIndex=1 if conditions are not met
+		-- set SkipIndex=1 if conditions for maintenance are not met
 		-- this is used to idntify is stats need to be updated or not. 
 		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed'
 		where (
@@ -298,8 +337,39 @@ begin
 				'Current fragmentation: ' + format(avg_fragmentation_in_percent/100,'p')+ ' with ' + cast(page_count as nvarchar(20)) + ' pages'
 			end
 		from #idxBefore
-		where SkipIndex=0
+		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/
+
+
+		---------------------------------------------
+		--- Index - Heaps 
+		---------------------------------------------
+
+		/* create queue for heaps */
+		if @RebuildHeaps=1 
+		begin
+			insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
+			select 
+			txtCMD = 'ALTER TABLE ' + @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' REBUILD;' 
+			, ExtraInfo = 'Rebuilding heap - forwarded records ' + cast(forwarded_record_count as varchar(100)) + ' out of ' + cast(record_count as varchar(100)) + ' record in the table'
+			from #idxBefore
+			where
+				type = 0 /*heaps*/
+				and 
+					(
+						@mode='dummy' 
+						or 
+						(forwarded_record_count/record_count>0.3) /* 30% of record count */
+						or
+						(forwarded_record_count>105000) /* for tables with > 350K rows dont wait for 30%, just run yje maintenance once we reach the 100K forwarded records */
+					)
+		end /* create queue for heaps */
 	end
+
+
+
+	---------------------------------------------
+	--- Statistics maintenance
+	---------------------------------------------
 
 	if @operation in('statistics','all')
 	begin 
@@ -415,7 +485,9 @@ begin
 			set identity_insert AzureSQLMaintenanceCMDQueue off
 		end
 	
-	/* iterate through all stats */
+		---------------------------------------------
+		--- Executing commands
+		---------------------------------------------
 		raiserror('Start executing commands...',0,0) with nowait
 		declare @T table(ID int, txtCMD nvarchar(max),ExtraInfo nvarchar(max));
 		while exists(select * from AzureSQLMaintenanceCMDQueue where ID>0)
@@ -440,7 +512,9 @@ begin
 		drop table AzureSQLMaintenanceCMDQueue;
 	end
 	
-	/* Clean old records from log table */
+	---------------------------------------------
+	--- Clean old records from log table
+	---------------------------------------------
 	if @LogToTable=1
 	begin
 		delete from AzureSQLMaintenanceLog 
