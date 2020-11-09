@@ -43,6 +43,8 @@ begin
 
 	UPDATE @columns SET dataType = REPLACE(dataType, 'VARYCHAR', 'VARCHAR');
 	UPDATE @columns SET dataType = REPLACE(dataType, 'DATETIM4', 'SMALLDATETIME');
+	UPDATE @columns SET dataType = REPLACE(dataType, 'FLT8', 'FLOAT');
+	UPDATE @columns SET dataType = REPLACE(dataType, 'FLT4', 'REAL');
 
 	INSERT INTO  @sql(s) VALUES ('create table ' + QUOTENAME(@tableName) + ' (')
 
@@ -69,4 +71,5 @@ begin
 	 ORDER BY id;
 
 	exec(@dmlQuery)
+	--print @dmlQuery
 end
