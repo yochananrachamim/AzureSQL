@@ -3,7 +3,7 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2020-10-14 
+	Current Version Date: 2020-11-09 
 ***********************************************
 
 Change Log: 
@@ -20,6 +20,7 @@ Change Log:
 			+ support for resumable index rebuild
 			+ add resume support for maintenance operation
 			+ add support for rebuilding heaps as optional parameter
+			+ optimize collecting index physical stats
 */
 
 if object_id('AzureSQLMaintenance') is null
@@ -37,6 +38,7 @@ ALTER Procedure [dbo].[AzureSQLMaintenance]
 as
 begin
 	set nocount on;
+	SET ANSI_WARNINGS OFF;
 	
 	---------------------------------------------
 	--- Varialbles and pre conditions check
@@ -52,11 +54,12 @@ begin
 	declare @KeepXOperationInLog int =3;
 	declare @ScriptHasAnError int = 0; 
 	declare @ResumableIndexRebuildSupported int;
+	declare @indexStatsMode sysname;
 
 	/* make sure parameters selected correctly */
 	set @operation = lower(@operation)
 	set @mode = lower(@mode)
-	set @debug = lower(@debug)
+	set @debug = lower(@debug) /* any value at this time will produce the temp tables as permanent tables */
 	
 	if @mode not in ('smart','dummy')
 		set @mode = 'smart'
@@ -83,17 +86,17 @@ begin
 		raiserror('     "0" (Default) using non resumable index rebuild.',0,0)
 		raiserror('     "1" using resumable index rebuild when it is supported.',0,0)
 		raiserror(' ',0,0)
-		raiserror('@LogToTable(bit) [optional]',0,0)
-		raiserror(' Rebuild HEAPS to fix forwarded records issue on tables with no clustered index',0,0)
-		raiserror('     0 - (Default) do not rebuild heaps',0,0)
-		raiserror('     1 - Rebuild heaps based on @mode parameter, @mode=dummy will rebuild all heaps',0,0)
-		raiserror(' ',0,0)
 		raiserror('@RebuildHeaps(bit) [optional]',0,0)
 		raiserror(' Logging option: @LogToTable(bit)',0,0)
 		raiserror('     0 - (Default) do not log operation to table',0,0)
 		raiserror('     1 - log operation to table',0,0)
 		raiserror('		for logging option only 3 last execution will be kept by default. this can be changed by easily in the procedure body.',0,0)
 		raiserror('		Log table will be created automatically if not exists.',0,0)
+		raiserror(' ',0,0)
+		raiserror('@LogToTable(bit) [optional]',0,0)
+		raiserror(' Rebuild HEAPS to fix forwarded records issue on tables with no clustered index',0,0)
+		raiserror('     0 - (Default) do not rebuild heaps',0,0)
+		raiserror('     1 - Rebuild heaps based on @mode parameter, @mode=dummy will rebuild all heaps',0,0)
 		raiserror(' ',0,0)
 		raiserror('Example:',0,0)
 		raiserror('		exec  AzureSQLMaintenance ''all'', @LogToTable=1',0,0)
@@ -140,8 +143,10 @@ begin
 			end
 			else
 				begin
-					-- command queue table exists but resume information is missing, thefore we drop the table.
-					drop table AzureSQLMaintenanceCMDQueue;
+					-- table [AzureSQLMaintenanceCMDQueue] exist but resume information does not exists
+					-- this might happen in case execution intrupted between collecting index & ststistics information and executing commands.
+					-- to fix that we drop the table now, it will be recreated later 
+					DROP TABLE [AzureSQLMaintenanceCMDQueue];
 				end
 		end
 
@@ -195,6 +200,12 @@ begin
 	---------------------------------------------
 	if @operation in('index','all')
 	begin
+		/**/
+		if @mode='smart' and @RebuildHeaps=1 
+			set @indexStatsMode = 'SAMPLED'
+		else
+			set @indexStatsMode = 'LIMITED'
+	
 		raiserror('Get index information...(wait)',0,0) with nowait;
 		/* Get Index Information */
 		select 
@@ -218,7 +229,7 @@ begin
 			,replicate('',128) as SkipReason
 		into #idxBefore
 		from sys.indexes idxs
-		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,'SAMPLED') i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
+		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
@@ -488,6 +499,14 @@ begin
 		---------------------------------------------
 		--- Executing commands
 		---------------------------------------------
+		/*
+		needed to rebuild indexes on comuted columns
+		if ANSI_WARNINGS is set to OFF we might get the followin exception:
+			Msg 1934, Level 16, State 1, Line 2
+			ALTER INDEX failed because the following SET options have incorrect settings: 'ANSI_WARNINGS'. Verify that SET options are correct for use with indexed views and/or indexes on computed columns and/or filtered indexes and/or query notifications and/or XML data type methods and/or spatial index operations.
+		*/
+		SET ANSI_WARNINGS ON;
+
 		raiserror('Start executing commands...',0,0) with nowait
 		declare @T table(ID int, txtCMD nvarchar(max),ExtraInfo nvarchar(max));
 		while exists(select * from AzureSQLMaintenanceCMDQueue where ID>0)
