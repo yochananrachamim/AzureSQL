@@ -78,7 +78,7 @@ begin
 		raiserror(' ',0,0)
 		raiserror('@mode(varchar(10)) [optional]',0,0)
 		raiserror(' optionaly you can supply second parameter for operation mode: ',0,0)
-		raiserror('     "smart" (Default) using smart decition about what index or stats should be touched.',0,0)
+		raiserror('     "smart" (Default) using smart decision about what index or stats should be touched.',0,0)
 		raiserror('     "dummy" going through all indexes and statistics regardless thier modifications or fragmentation.',0,0)
 		raiserror(' ',0,0)
 		raiserror('@ResumableIndexRebuild(bit) [optional]',0,0)
