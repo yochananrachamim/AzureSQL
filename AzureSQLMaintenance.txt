@@ -402,7 +402,7 @@ begin
 		into #statsBefore
 		from sys.stats s cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp 
 		left join sys.indexes i on sp.object_id = i.object_id and sp.stats_id = i.index_id
-		where OBJECT_SCHEMA_NAME(s.object_id) != 'sys' and /*Modified stats or Dummy mode*/(isnull(sp.modification_counter,0)>=0 or @mode='dummy')
+		where OBJECT_SCHEMA_NAME(s.object_id) != 'sys' and /*Modified stats or Dummy mode*/(isnull(sp.modification_counter,0)>0 or @mode='dummy')
 		order by sp.last_updated asc
 
 		/*Remove statistics if it is handled by index rebuild / reorginize 
