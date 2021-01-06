@@ -3,7 +3,7 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2020-11-09 
+	Current Version Date: 2021-01-06 
 ***********************************************
 
 Change Log: 
@@ -262,12 +262,19 @@ begin
 		
 		-- set SkipIndex=1 if conditions for maintenance are not met
 		-- this is used to idntify is stats need to be updated or not. 
-		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed'
+		-- Check#1 - if table is too small
+		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as table is too small'
 		where (
-					-- these are the condition when to skip index maintenance
-					page_count> @minPageCountForIndex  /* not small tables */
-					and
-					avg_fragmentation_in_percent< 5 /* Less than 5% of fragmentation */
+					/*Table is small*/
+					(page_count<=@minPageCountForIndex)
+				)
+				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
+		
+		-- Check#2 - if table is not small and fragmentation % is too low 
+		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as fragmentation % is low'
+		where (
+					/*Table is big enough - but fragmentation is less than 5%*/
+					(page_count>@minPageCountForIndex and avg_fragmentation_in_percent<5)
 				)
 				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
 		
