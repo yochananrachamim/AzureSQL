@@ -3,24 +3,12 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2021-01-06 
+	Current Version Date: 2021-01-07
 ***********************************************
 
 Change Log: 
-	2017-12-12: fix total indexes reported to the output window. functionality was not impacted by this issue.
-	2018-08-09: add filter to skip update statistics if it updated by using index rebuild.
-	2019-02-06: disable online operations where its not supported by server edition
-				add report for failure when error occurs during executions
-	2019-06-24: avoid running online operation when text/ntext or image file type used in the table
-			special thanks for Haden Kingsland (@theflyingdba) for sharing the code change for these types.
-			+ avoid rebuild twice when lob data exists due to duplicate row in index phisical stats dmv.
-	2020-10-14
-			+ Fix issue #11 - Out of date stats aren't always updated
-			+ Fix issue #4 - System Generated Index Names are Causing syntax issues
-			+ support for resumable index rebuild
-			+ add resume support for maintenance operation
-			+ add support for rebuilding heaps as optional parameter
-			+ optimize collecting index physical stats
+	2020-01-07
+			+ some bug fixes - see GitHub for more information 
 */
 
 if object_id('AzureSQLMaintenance') is null
@@ -38,7 +26,6 @@ ALTER Procedure [dbo].[AzureSQLMaintenance]
 as
 begin
 	set nocount on;
-	SET ANSI_WARNINGS OFF;
 	
 	---------------------------------------------
 	--- Varialbles and pre conditions check
@@ -209,7 +196,7 @@ begin
 		raiserror('Get index information...(wait)',0,0) with nowait;
 		/* Get Index Information */
 		select 
-			i.[object_id]
+			idxs.[object_id]
 			,ObjectSchema = OBJECT_SCHEMA_NAME(idxs.object_id)
 			,ObjectName = object_name(idxs.object_id) 
 			,IndexName = idxs.name
@@ -336,7 +323,7 @@ begin
 		select 
 		txtCMD = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '+ @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' ' +
 		case when (
-					avg_fragmentation_in_percent>5 and avg_fragmentation_in_percent<30 and @mode = 'smart')/* index fragmentation condition */ 
+					avg_fragmentation_in_percent between 5 and 30 and @mode = 'smart')/* index fragmentation condition */ 
 					or 
 					(@mode='dummy' and type in (5,6)/* Columnstore indexes in dummy mode -> reorganize them */
 				) then
@@ -376,7 +363,7 @@ begin
 					(
 						@mode='dummy' 
 						or 
-						(forwarded_record_count/record_count>0.3) /* 30% of record count */
+						(forwarded_record_count/nullif(record_count,0)>0.3) /* 30% of record count */
 						or
 						(forwarded_record_count>105000) /* for tables with > 350K rows dont wait for 30%, just run yje maintenance once we reach the 100K forwarded records */
 					)
