@@ -169,7 +169,6 @@ else
 
 try
 {
-Clear
 
 #--------------------------------
 #Check the parameters.
@@ -232,8 +231,8 @@ logMsg("Executed the query to obtain the tables of query store..") (1)
     $FileBCP = $sFolderV + $Reader.GetSqlString(0).ToString() + ".bcp"
     $FileFMT = $sFolderV + $Reader.GetSqlString(0).ToString() + ".xml"
 
-    $CommandFmt=“bcp 'sys." + $Reader.GetSqlString(0).ToString() + "' Format nul -f "+$FileFMT + " -c -x -S " +$server+" -U " + $user + " -P "+$password+" -d "+$Db
-    $CommandOut=“bcp 'sys." + $Reader.GetSqlString(0).ToString() + "' out "+$FileBCP + " -c -S " +$server+" -U " + $user + " -P "+$password+" -d "+$Db
+    $CommandFmt="bcp 'sys." + $Reader.GetSqlString(0).ToString() + "' Format nul -f "+$FileFMT + " -rMsSupportRowTerminator -tMsSupportFieldTerminator -c -x -S " +$server+" -U " + $user + " -P "+$password+" -d "+$Db
+    $CommandOut="bcp 'sys." + $Reader.GetSqlString(0).ToString() + "' out "+$FileBCP + " -c -rMsSupportRowTerminator -tMsSupportFieldTerminator -S " +$server+" -U " + $user + " -P "+$password+" -d "+$Db
  
     logMsg("Obtain the Format file for " + $FileFMT ) (3)
       $result = Invoke-Expression -Command $CommandFmt
@@ -256,9 +255,9 @@ logMsg("Executed the query to obtain the tables of query store..") (1)
 }
 catch
   {
-    logMsg("QDS Script was executed incorrectly ..: " + $Error[0].Exception) (2)
+    logMsg("QDS Script was executed incorrectly ..: " + $Error[0].Exception) (1)
   }
 finally
 {
-   logMsg("QDS Script finished - Check the previous status line to know if it was success or not") (2)
+   logMsg("QDS Script finished - Check the previous status line to know if it was success or not") (1)
 } 
