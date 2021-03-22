@@ -40,6 +40,8 @@ begin
 	declare @OperationTime datetime2 = sysdatetime();
 	declare @KeepXOperationInLog int =3;
 	declare @ScriptHasAnError int = 0; 
+	declare @MinIndexFragmentationPercent int = 5;
+	declare @MaxIndexFragmentationPercent int = 30;
 	declare @ResumableIndexRebuildSupported int;
 	declare @indexStatsMode sysname;
 
@@ -168,7 +170,7 @@ begin
 	---------------------------------------------
 	if @ResumableIndexRebuild=1 
 	begin
-		if cast(SERVERPROPERTY('EngineEdition')as int)>=5 or cast(SERVERPROPERTY('ProductMajorVersion')as int)>=14
+		if cast(SERVERPROPERTY('EngineEdition')as int)>=@MinIndexFragmentationPercent or cast(SERVERPROPERTY('ProductMajorVersion')as int)>=14
 		begin
 			set @ResumableIndexRebuildSupported=1;
 		end
@@ -260,8 +262,8 @@ begin
 		-- Check#2 - if table is not small and fragmentation % is too low 
 		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as fragmentation % is low'
 		where (
-					/*Table is big enough - but fragmentation is less than 5%*/
-					(page_count>@minPageCountForIndex and avg_fragmentation_in_percent<5)
+					/*Table is big enough - but fragmentation is less than @MinIndexFragmentationPercent (5%) */
+					(page_count>@minPageCountForIndex and avg_fragmentation_in_percent<@MinIndexFragmentationPercent)
 				)
 				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
 		
@@ -287,7 +289,7 @@ begin
 		set @msg = 'Average Fragmentation: ' + @msg
 		raiserror(@msg,0,0) with nowait
 
-		select @msg = sum(iif(avg_fragmentation_in_percent>=5 and page_count>@minPageCountForIndex,1,0)) from #idxBefore 
+		select @msg = sum(iif(avg_fragmentation_in_percent>=@MinIndexFragmentationPercent and page_count>@minPageCountForIndex,1,0)) from #idxBefore 
 		set @msg = 'Fragmented Indexes: ' + @msg
 		raiserror(@msg,0,0) with nowait
 
@@ -323,7 +325,7 @@ begin
 		select 
 		txtCMD = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '+ @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' ' +
 		case when (
-					avg_fragmentation_in_percent between 5 and 30 and @mode = 'smart')/* index fragmentation condition */ 
+					avg_fragmentation_in_percent between @MinIndexFragmentationPercent and @MaxIndexFragmentationPercent and @mode = 'smart')/* index fragmentation condition */ 
 					or 
 					(@mode='dummy' and type in (5,6)/* Columnstore indexes in dummy mode -> reorganize them */
 				) then
