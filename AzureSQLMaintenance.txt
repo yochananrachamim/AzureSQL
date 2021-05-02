@@ -225,6 +225,8 @@ begin
 			,replicate('',128) as SkipReason
 		into #idxBefore
 		from sys.indexes idxs
+		inner join sys.objects [SO]
+                 on [SO].object_id = [idxs].object_id AND [SO].[type] IN ('U', 'V') 
 		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
