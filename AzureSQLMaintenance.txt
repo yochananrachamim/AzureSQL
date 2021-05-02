@@ -3,7 +3,7 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2021-01-07
+	Current Version Date: 2021-05-02
 ***********************************************
 
 Change Log: 
@@ -21,7 +21,7 @@ ALTER Procedure [dbo].[AzureSQLMaintenance]
 		@ResumableIndexRebuild bit = 0,
 		@RebuildHeaps bit = 0,
 		@LogToTable bit = 0,
-		@debug nvarchar = 'none'
+		@debug nvarchar(20) = 'none' /* Optional values: 'none', 'whatif'*/
 	)
 as
 begin
@@ -154,6 +154,11 @@ begin
 		raiserror(@msg,0,0)
 		set @msg = 'set LogToTable = ' + cast(@LogToTable as varchar(1));
 		raiserror(@msg,0,0)
+		if @debug != 'none'
+		begin
+			set @msg = 'set Debug = ' + cast(@debug as varchar(20));
+			raiserror(@msg,0,0)
+		end
 		raiserror('-----------------------',0,0)
 	end
 
@@ -212,7 +217,11 @@ begin
 			,i.forwarded_record_count
 			,null as OnlineOpIsNotSupported
 			,null as ObjectDoesNotSupportResumableOperation
+			,0 as IsPartitioned
 			,0 as SkipIndex
+			,cast('' as nvarchar(100)) as IndexOperation
+			,cast('' as nvarchar(max)) as TSQLCommand
+			,cast('' as nvarchar(max)) as TSQLCommandExtraInfo
 			,replicate('',128) as SkipReason
 		into #idxBefore
 		from sys.indexes idxs
@@ -222,6 +231,9 @@ begin
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
 		and idxs.is_disabled=0
 		order by i.avg_fragmentation_in_percent desc, i.page_count desc
+
+		-- mark partitioned indexe
+		update #idxBefore set IsPartitioned=1 where [object_id] in (select [object_id] from #idxBefore where partition_number>1)
 				
 		-- mark indexes XML,spatial and columnstore not to run online update 
 		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where [type]=3 /*XML Indexes*/)
@@ -275,6 +287,26 @@ begin
 				)
 				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
 
+		/*Add information about dummy mode*/
+		update #idxBefore set TSQLCommandExtraInfo = TSQLCommandExtraInfo + 'Dummy mode '
+		where @mode='dummy' and type !=0
+
+		/* choose index operation Rebuild or Reorginize*/
+		update #idxBefore set IndexOperation='REORGANIZE',
+		TSQLCommandExtraInfo = TSQLCommandExtraInfo + 'columnstore index detected - reorginize'
+		where @mode='dummy' and type in (5,6)/* Columnstore indexes in dummy mode -> reorganize them */
+
+		update #idxBefore set IndexOperation='REORGANIZE'
+		where avg_fragmentation_in_percent between 5 and 30 and @mode = 'smart'/* index fragmentation condition */ 
+		and type!=0 /*avoid heaps*/
+
+		-- all else should go for rebuild
+		update #idxBefore set IndexOperation='REBUILD'
+		where type not in (0,5,6) /*Heaps and CS indexes*/
+
+		update #idxBefore set TSQLCommandExtraInfo = TSQLCommandExtraInfo + ' Current fragmentation: ' + format(avg_fragmentation_in_percent/100,'p')+ ' with ' + cast(page_count as nvarchar(20)) + ' pages'
+		where IndexOperation != ''
+
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Index Information:',0,0) with nowait
 		raiserror('---------------------------------------',0,0) with nowait
@@ -317,32 +349,43 @@ begin
 			set @idxIdentifierEnd = ']'
 		end
 
-			
-		/* create queue for indexes */
-		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
-		select 
-		txtCMD = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '+ @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' ' +
-		case when (
-					avg_fragmentation_in_percent between 5 and 30 and @mode = 'smart')/* index fragmentation condition */ 
-					or 
-					(@mode='dummy' and type in (5,6)/* Columnstore indexes in dummy mode -> reorganize them */
-				) then
-			 'REORGANIZE;'
-			when OnlineOpIsNotSupported=1 then
-			'REBUILD WITH(ONLINE=OFF,MAXDOP=1);'
-			when ObjectDoesNotSupportResumableOperation=1 or @ResumableIndexRebuildSupported=0 or @ResumableIndexRebuild=0 then
-			'REBUILD WITH(ONLINE=ON,MAXDOP=1);'
-			else
-			'REBUILD WITH(ONLINE=ON,MAXDOP=1, RESUMABLE=ON);'
-		end
-		, ExtraInfo = 
-			case when type in (5,6) then
-				'Dummy mode, reorganize columnstore indexes'
-			else 
-				'Current fragmentation: ' + format(avg_fragmentation_in_percent/100,'p')+ ' with ' + cast(page_count as nvarchar(20)) + ' pages'
+		/* Build Index maintenance command  - Aletr index command */ 
+		update #idxBefore set TSQLCommand = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '+ @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' ' 
+		where type!=0 /*avoid heaps*/ and SkipIndex=0
+
+		/* Build Index maintenance command  - add rebuild or reorginize */ 
+		update #idxBefore set TSQLCommand = TSQLCommand + IndexOperation + ' '
+		
+		/* Build Index maintenance command  - Rebuid or Reorginize */ 
+		update #idxBefore set TSQLCommand = TSQLCommand + 
+			case when 
+			IsPartitioned = 1 then 'PARTITION=' + cast(partition_number as nvarchar(max)) + ' '
+			else ''
 			end
-		from #idxBefore
-		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/
+		where type!=0 /*avoid heaps*/ and SkipIndex=0
+
+		/* Build Index maintenance command  - MAXDOP and Online or offline */ 
+		update #idxBefore set TSQLCommand = TSQLCommand + 'WITH(MAXDOP=1,ONLINE='+
+			case when OnlineOpIsNotSupported=1 then 'OFF'
+			else 'ON'
+			end
+		where type!=0 /*avoid heaps*/ and SkipIndex=0
+
+		/* Build Index maintenance command  - Resumable Operation */ 
+		update #idxBefore set TSQLCommand = TSQLCommand +
+			case when @ResumableIndexRebuild=1 and ObjectDoesNotSupportResumableOperation=0 and @ResumableIndexRebuildSupported=1
+				then 'RESUMABLE=ON' 
+				else ''
+				end
+		where type!=0 /*avoid heaps*/ and SkipIndex=0
+		
+		/* Build Index maintenance command  - Closing the line of TSQL */ 
+			update #idxBefore set TSQLCommand = TSQLCommand + ');'			
+			where type!=0 /*avoid heaps*/ and SkipIndex=0
+		
+		/* Tranfer commands to command queue table*/
+		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
+			select TSQLCommand, TSQLCommandExtraInfo from #idxBefore
 
 
 		---------------------------------------------
@@ -484,7 +527,7 @@ begin
 		/*Save current execution parameters in case resume is needed */
 		if @operation!='resume'
 		begin
-			set @ExtraInfo = (select top 1 LogToTable = @LogToTable, operation=@operation, operationTime=@OperationTime, mode=@mode, ResumableIndexRebuild = @ResumableIndexRebuild from sys.tables for JSON path, WITHOUT_ARRAY_WRAPPER)
+			set @ExtraInfo = (select top 1 LogToTable = @LogToTable, operation=@operation, operationTime=@OperationTime, mode=@mode, ResumableIndexRebuild = @ResumableIndexRebuild, debug=@debug from sys.tables for JSON path, WITHOUT_ARRAY_WRAPPER)
 			set identity_insert AzureSQLMaintenanceCMDQueue on
 			insert into AzureSQLMaintenanceCMDQueue(ID,txtCMD,ExtraInfo) values(-1,'parameters to be used by resume code path',@ExtraInfo)
 			set identity_insert AzureSQLMaintenanceCMDQueue off
@@ -502,6 +545,7 @@ begin
 		SET ANSI_WARNINGS ON;
 
 		raiserror('Start executing commands...',0,0) with nowait
+		if @debug='whatif' raiserror('*** whatif mode ***',0,0) with nowait
 		declare @T table(ID int, txtCMD nvarchar(max),ExtraInfo nvarchar(max));
 		while exists(select * from AzureSQLMaintenanceCMDQueue where ID>0)
 		begin
@@ -510,8 +554,8 @@ begin
 			raiserror(@SQLCMD,0,0) with nowait
 			if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,@SQLCMD,@ExtraInfo,sysdatetime(),null,'Started')
 			begin try
-				exec(@SQLCMD)	
-				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = 'Succeeded' where id=SCOPE_IDENTITY()
+				if @debug != 'whatif' exec(@SQLCMD)	
+				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = iif(@debug='whatif','not executed - whatif mode','Succeeded') where id=SCOPE_IDENTITY()
 			end try
 			begin catch
 				set @ScriptHasAnError=1;
@@ -528,7 +572,7 @@ begin
 	---------------------------------------------
 	--- Clean old records from log table
 	---------------------------------------------
-	if @LogToTable=1
+	if @LogToTable=1 
 	begin
 		delete from AzureSQLMaintenanceLog 
 		from 
