@@ -7,6 +7,8 @@
 ***********************************************
 
 Change Log: 
+	2020-05-02 	- Added support for "per partition" rebuild / reorg
+			- added filter for only User tables and views for index maintenance 
 	2020-01-07
 			+ some bug fixes - see GitHub for more information 
 */
