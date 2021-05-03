@@ -16,600 +16,842 @@ Change Log:
 				+ some bug fixes - see GitHub for more information 
 */
 
-if object_id('AzureSQLMaintenance') is null
-	exec('create procedure AzureSQLMaintenance as /*dummy procedure body*/ select 1;')	
+IF OBJECT_ID('dbo.AzureSQLMaintenance') IS NULL
+    EXEC ('create procedure AzureSQLMaintenance as /*dummy procedure body*/ select 1;');
 GO
-ALTER Procedure [dbo].[AzureSQLMaintenance]
-	(
-		@operation nvarchar(10) = null,
-		@mode nvarchar(10) = 'smart',
-		@ResumableIndexRebuild bit = 0,
-		@RebuildHeaps bit = 0,
-		@LogToTable bit = 0,
-		@WorkOnSchema sysname = null,
-		@debug nvarchar(20) = 'none' /* Optional values: 'none', 'whatif'*/
-	)
-as
-begin
-	set nocount on;
-	
-	---------------------------------------------
-	--- Varialbles and pre conditions check
-	---------------------------------------------
+ALTER PROCEDURE [dbo].[AzureSQLMaintenance]
+(
+    @operation NVARCHAR(10) = NULL,
+    @mode NVARCHAR(10) = 'smart',
+    @ResumableIndexRebuild BIT = 0,
+    @RebuildHeaps BIT = 0,
+    @LogToTable BIT = 0,
+    @WorkOnSchema sysname = NULL,
+    @debug NVARCHAR(20) = 'none' /* Optional values: 'none', 'whatif'*/
+)
+AS
+BEGIN
+    SET NOCOUNT ON;
 
-	set quoted_identifier on;
-	declare @idxIdentifierBegin char(1), @idxIdentifierEnd char(1);
-	declare @statsIdentifierBegin char(1), @statsIdentifierEnd char(1);
-	
-	declare @msg nvarchar(max);
-	declare @minPageCountForIndex int = 40;
-	declare @OperationTime datetime2 = sysdatetime();
-	declare @KeepXOperationInLog int =3;
-	declare @ScriptHasAnError int = 0; 
-	declare @ResumableIndexRebuildSupported int;
-	declare @indexStatsMode sysname;
+    ---------------------------------------------
+    --- Varialbles and pre conditions check
+    ---------------------------------------------
 
-	/* make sure parameters selected correctly */
-	set @operation = lower(@operation)
-	set @mode = lower(@mode)
-	set @debug = lower(@debug) /* any value at this time will produce the temp tables as permanent tables */
-	
-	if @mode not in ('smart','dummy')
-		set @mode = 'smart'
+    SET QUOTED_IDENTIFIER ON;
+    DECLARE @idxIdentifierBegin CHAR(1),
+            @idxIdentifierEnd CHAR(1);
+    DECLARE @statsIdentifierBegin CHAR(1),
+            @statsIdentifierEnd CHAR(1);
 
-	---------------------------------------------
-	--- Begin
-	---------------------------------------------
+    DECLARE @msg NVARCHAR(MAX);
+    DECLARE @minPageCountForIndex INT = 40;
+    DECLARE @OperationTime DATETIME2 = SYSDATETIME();
+    DECLARE @KeepXOperationInLog INT = 3;
+    DECLARE @ScriptHasAnError INT = 0;
+    DECLARE @ResumableIndexRebuildSupported INT;
+    DECLARE @indexStatsMode sysname;
 
-	if @operation not in ('index','statistics','all') or @operation is null
-	begin
-		raiserror('@operation (varchar(10)) [mandatory]',0,0)
-		raiserror(' Select operation to perform:',0,0)
-		raiserror('     "index" to perform index maintenance',0,0)
-		raiserror('     "statistics" to perform statistics maintenance',0,0)
-		raiserror('     "all" to perform indexes and statistics maintenance',0,0)
-		raiserror(' ',0,0)
-		raiserror('@mode(varchar(10)) [optional]',0,0)
-		raiserror(' optionaly you can supply second parameter for operation mode: ',0,0)
-		raiserror('     "smart" (Default) using smart decision about what index or stats should be touched.',0,0)
-		raiserror('     "dummy" going through all indexes and statistics regardless thier modifications or fragmentation.',0,0)
-		raiserror(' ',0,0)
-		raiserror('@ResumableIndexRebuild(bit) [optional]',0,0)
-		raiserror(' optionaly you can choose to rebuild indexes as resumable operation: ',0,0)
-		raiserror('     "0" (Default) using non resumable index rebuild.',0,0)
-		raiserror('     "1" using resumable index rebuild when it is supported.',0,0)
-		raiserror(' ',0,0)
-		raiserror('@RebuildHeaps(bit) [optional]',0,0)
-		raiserror(' Logging option: @LogToTable(bit)',0,0)
-		raiserror('     0 - (Default) do not log operation to table',0,0)
-		raiserror('     1 - log operation to table',0,0)
-		raiserror('		for logging option only 3 last execution will be kept by default. this can be changed by easily in the procedure body.',0,0)
-		raiserror('		Log table will be created automatically if not exists.',0,0)
-		raiserror(' ',0,0)
-		raiserror('@LogToTable(bit) [optional]',0,0)
-		raiserror(' Rebuild HEAPS to fix forwarded records issue on tables with no clustered index',0,0)
-		raiserror('     0 - (Default) do not rebuild heaps',0,0)
-		raiserror('     1 - Rebuild heaps based on @mode parameter, @mode=dummy will rebuild all heaps',0,0)
-		raiserror(' ',0,0)
-		raiserror('Example:',0,0)
-		raiserror('		exec  AzureSQLMaintenance ''all'', @LogToTable=1',0,0)
+    /* make sure parameters selected correctly */
+    SET @operation = LOWER(@operation);
+    SET @mode = LOWER(@mode);
+    SET @debug = LOWER(@debug); /* any value at this time will produce the temp tables as permanent tables */
 
-	end
-	else 
-	begin
-		
-		---------------------------------------------
-		--- Validate Schema name if provided
-		---------------------------------------------
-		if @WorkOnSchema is not null and not exists(select * from sys.schemas where [name] = @WorkOnSchema)
-		begin
-			raiserror('Provided schema name does not exists - please make sure the correct schema name is provided',16,1)
-			return 1;
-		end
+    IF @mode NOT IN ( 'smart', 'dummy' )
+        SET @mode = 'smart';
 
-		---------------------------------------------
-		--- Prepare log table
-		---------------------------------------------
+    ---------------------------------------------
+    --- Begin
+    ---------------------------------------------
 
-		/* Prepare Log Table */
-		if object_id('AzureSQLMaintenanceLog') is null and @LogToTable=1
-		begin
-			create table AzureSQLMaintenanceLog (id bigint primary key identity(1,1), OperationTime datetime2, command varchar(4000),ExtraInfo varchar(4000), StartTime datetime2, EndTime datetime2, StatusMessage varchar(1000));
-		end
+    IF @operation NOT IN ( 'index', 'statistics', 'all' )
+       OR @operation IS NULL
+    BEGIN
+        RAISERROR('@operation (varchar(10)) [mandatory]', 0, 0);
+        RAISERROR(' Select operation to perform:', 0, 0);
+        RAISERROR('     "index" to perform index maintenance', 0, 0);
+        RAISERROR('     "statistics" to perform statistics maintenance', 0, 0);
+        RAISERROR('     "all" to perform indexes and statistics maintenance', 0, 0);
+        RAISERROR(' ', 0, 0);
+        RAISERROR('@mode(varchar(10)) [optional]', 0, 0);
+        RAISERROR(' optionaly you can supply second parameter for operation mode: ', 0, 0);
+        RAISERROR('     "smart" (Default) using smart decision about what index or stats should be touched.', 0, 0);
+        RAISERROR(
+                     '     "dummy" going through all indexes and statistics regardless thier modifications or fragmentation.',
+                     0,
+                     0
+                 );
+        RAISERROR(' ', 0, 0);
+        RAISERROR('@ResumableIndexRebuild(bit) [optional]', 0, 0);
+        RAISERROR(' optionaly you can choose to rebuild indexes as resumable operation: ', 0, 0);
+        RAISERROR('     "0" (Default) using non resumable index rebuild.', 0, 0);
+        RAISERROR('     "1" using resumable index rebuild when it is supported.', 0, 0);
+        RAISERROR(' ', 0, 0);
+        RAISERROR('@RebuildHeaps(bit) [optional]', 0, 0);
+        RAISERROR(' Logging option: @LogToTable(bit)', 0, 0);
+        RAISERROR('     0 - (Default) do not log operation to table', 0, 0);
+        RAISERROR('     1 - log operation to table', 0, 0);
+        RAISERROR(
+                     '		for logging option only 3 last execution will be kept by default. this can be changed by easily in the procedure body.',
+                     0,
+                     0
+                 );
+        RAISERROR('		Log table will be created automatically if not exists.', 0, 0);
+        RAISERROR(' ', 0, 0);
+        RAISERROR('@LogToTable(bit) [optional]', 0, 0);
+        RAISERROR(' Rebuild HEAPS to fix forwarded records issue on tables with no clustered index', 0, 0);
+        RAISERROR('     0 - (Default) do not rebuild heaps', 0, 0);
+        RAISERROR('     1 - Rebuild heaps based on @mode parameter, @mode=dummy will rebuild all heaps', 0, 0);
+        RAISERROR(' ', 0, 0);
+        RAISERROR('Example:', 0, 0);
+        RAISERROR('		exec  AzureSQLMaintenance ''all'', @LogToTable=1', 0, 0);
 
-		---------------------------------------------
-		--- Resume operation
-		---------------------------------------------
+    END;
+    ELSE
+    BEGIN
 
-		/*Check is there is operation to resume*/
-		if OBJECT_ID('AzureSQLMaintenanceCMDQueue') is not null 
-		begin
-			if 
-				/*resume information exists*/ exists(select * from AzureSQLMaintenanceCMDQueue where ID=-1) 
-			begin
-				/*resume operation confirmed*/
-				set @operation='resume' -- set operation to resume, this can only be done by the proc, cannot get this value as parameter
+        ---------------------------------------------
+        --- Validate Schema name if provided
+        ---------------------------------------------
+        IF @WorkOnSchema IS NOT NULL
+           AND NOT EXISTS
+        (
+            SELECT *
+            FROM sys.schemas
+            WHERE [name] = @WorkOnSchema
+        )
+        BEGIN
+            RAISERROR(
+                         'Provided schema name does not exists - please make sure the correct schema name is provided',
+                         16,
+                         1
+                     );
+            RETURN 1;
+        END;
 
-				-- restore operation parameters 
-				select top 1
-				@LogToTable = JSON_VALUE(ExtraInfo,'$.LogToTable')
-				,@mode = JSON_VALUE(ExtraInfo,'$.mode')
-				,@ResumableIndexRebuild = JSON_VALUE(ExtraInfo,'$.ResumableIndexRebuild')
-				from AzureSQLMaintenanceCMDQueue 
-				where ID=-1
-				
-				raiserror('-----------------------',0,0)
-				set @msg = 'Resuming previous operation'
-				raiserror(@msg,0,0)
-				raiserror('-----------------------',0,0)
-			end
-			else
-				begin
-					-- table [AzureSQLMaintenanceCMDQueue] exist but resume information does not exists
-					-- this might happen in case execution intrupted between collecting index & ststistics information and executing commands.
-					-- to fix that we drop the table now, it will be recreated later 
-					DROP TABLE [AzureSQLMaintenanceCMDQueue];
-				end
-		end
+        ---------------------------------------------
+        --- Prepare log table
+        ---------------------------------------------
 
+        /* Prepare Log Table */
+        IF OBJECT_ID('dbo.AzureSQLMaintenanceLog') IS NULL
+           AND @LogToTable = 1
+        BEGIN
+            CREATE TABLE dbo.AzureSQLMaintenanceLog
+            (
+                id BIGINT PRIMARY KEY IDENTITY(1, 1),
+                OperationTime DATETIME2,
+                command VARCHAR(4000),
+                ExtraInfo VARCHAR(4000),
+                StartTime DATETIME2,
+                EndTime DATETIME2,
+                StatusMessage VARCHAR(1000)
+            );
+        END;
 
-		---------------------------------------------
-		--- Report operation parameters
-		---------------------------------------------
-		
-		/*Write operation parameters*/
-		raiserror('-----------------------',0,0)
-		set @msg = 'set operation = ' + @operation;
-		raiserror(@msg,0,0)
-		set @msg = 'set mode = ' + @mode;
-		raiserror(@msg,0,0)
-		set @msg = 'set ResumableIndexRebuild = ' + cast(@ResumableIndexRebuild as varchar(1));
-		raiserror(@msg,0,0)
-		set @msg = 'set RebuildHeaps = ' + cast(@RebuildHeaps as varchar(1));
-		raiserror(@msg,0,0)
-		set @msg = 'set LogToTable = ' + cast(@LogToTable as varchar(1));
-		raiserror(@msg,0,0)
-		if @debug != 'none'
-		begin
-			set @msg = 'set Debug = ' + cast(@debug as varchar(20));
-			raiserror(@msg,0,0)
-		end
-		if @WorkOnSchema is not null
-		begin
-			set @msg = 'set Shcema = ' + cast(@WorkOnSchema as sysname);
-			raiserror(@msg,0,0)
-		end
-		raiserror('-----------------------',0,0)
-	end
+        ---------------------------------------------
+        --- Resume operation
+        ---------------------------------------------
 
-	if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,null,null,sysdatetime(),sysdatetime(),'Starting operation: Operation=' +@operation + ' Mode=' + @mode + ' Keep log for last ' + cast(@KeepXOperationInLog as varchar(10)) + ' operations' )	
+        /*Check is there is operation to resume*/
+        IF OBJECT_ID('dbo.AzureSQLMaintenanceCMDQueue') IS NOT NULL
+        BEGIN
+            IF
+            /*resume information exists*/ EXISTS
+            (
+                SELECT *
+                FROM dbo.AzureSQLMaintenanceCMDQueue
+                WHERE ID = -1
+            )
+            BEGIN
+                /*resume operation confirmed*/
+                SET @operation = 'resume'; -- set operation to resume, this can only be done by the proc, cannot get this value as parameter
 
-	-- create command queue table, if there table exits then we resume operation in earlier stage.
-	if @operation!='resume'
-		create table AzureSQLMaintenanceCMDQueue (ID int identity primary key,txtCMD nvarchar(max),ExtraInfo varchar(max))
+                -- restore operation parameters 
+                SELECT TOP 1
+                       @LogToTable = JSON_VALUE(ExtraInfo, '$.LogToTable'),
+                       @mode = JSON_VALUE(ExtraInfo, '$.mode'),
+                       @ResumableIndexRebuild = JSON_VALUE(ExtraInfo, '$.ResumableIndexRebuild')
+                FROM dbo.AzureSQLMaintenanceCMDQueue
+                WHERE ID = -1;
 
-	---------------------------------------------
-	--- Check if engine support resumable index operation
-	---------------------------------------------
-	if @ResumableIndexRebuild=1 
-	begin
-		if cast(SERVERPROPERTY('EngineEdition')as int)>=5 or cast(SERVERPROPERTY('ProductMajorVersion')as int)>=14
-		begin
-			set @ResumableIndexRebuildSupported=1;
-		end
-		else
-		begin 
-				set @ResumableIndexRebuildSupported=0;
-				set @msg = 'Resumable index rebuild is not supported on this database'
-				raiserror(@msg,0,0)
-				if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,null,null,sysdatetime(),sysdatetime(),@msg)	
-		end
-	end
+                RAISERROR('-----------------------', 0, 0);
+                SET @msg = N'Resuming previous operation';
+                RAISERROR(@msg, 0, 0);
+                RAISERROR('-----------------------', 0, 0);
+            END;
+            ELSE
+            BEGIN
+                -- table [AzureSQLMaintenanceCMDQueue] exist but resume information does not exists
+                -- this might happen in case execution intrupted between collecting index & ststistics information and executing commands.
+                -- to fix that we drop the table now, it will be recreated later 
+                DROP TABLE dbo.[AzureSQLMaintenanceCMDQueue];
+            END;
+        END;
 
 
-	---------------------------------------------
-	--- Index maintenance
-	---------------------------------------------
-	if @operation in('index','all')
-	begin
-		/**/
-		if @mode='smart' and @RebuildHeaps=1 
-			set @indexStatsMode = 'SAMPLED'
-		else
-			set @indexStatsMode = 'LIMITED'
-	
-		raiserror('Get index information...(wait)',0,0) with nowait;
-		/* Get Index Information */
-				select 
-			idxs.[object_id]
-			,ObjectSchema = sc.name
-			,ObjectName =  so.name
-			,IndexName = idxs.name
-			,idxs.type
-			,idxs.type_desc
-			,i.avg_fragmentation_in_percent
-			,i.page_count
-			,i.index_id
-			,i.partition_number
-			,i.avg_page_space_used_in_percent
-			,i.record_count
-			,i.ghost_record_count
-			,i.forwarded_record_count
-			,null as OnlineOpIsNotSupported
-			,null as ObjectDoesNotSupportResumableOperation
-			,CASE WHEN ds.type='PS' THEN 1 ELSE 0 END as IsPartitioned
-			,0 as SkipIndex
-			,cast('' as nvarchar(100)) as IndexOperation
-			,cast('' as nvarchar(max)) as TSQLCommand
-			,cast('' as nvarchar(max)) as TSQLCommandExtraInfo
-			,replicate('',128) as SkipReason
-		into #idxBefore
-		from sys.indexes idxs
-		inner join sys.objects [SO]
-                 on [SO].object_id = [idxs].object_id AND [SO].[type] IN ('U', 'V') 
-		inner join sys.schemas sc on sc.schema_id = SO.schema_id
-		inner join sys.data_spaces ds on idxs.data_space_id = ds.data_space_id
-		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
-		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
-		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
-		and sc.name !='sys' and (@WorkOnSchema is null or sc.name = @WorkOnSchema)
-		and idxs.is_disabled=0
-		order by i.avg_fragmentation_in_percent desc, i.page_count desc
-		
-		-- mark indexes XML,spatial and columnstore not to run online update 
-		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where [type]=3 /*XML Indexes*/)
+        ---------------------------------------------
+        --- Report operation parameters
+        ---------------------------------------------
 
-		-- mark clustered indexes for tables with 'text','ntext','image' to rebuild offline
-		update #idxBefore set OnlineOpIsNotSupported=1 
-		where index_id=1 /*clustered*/ and [object_id] in (
-			select object_id
-			from sys.columns c join sys.types t on c.user_type_id = t.user_type_id
-			where t.name in ('text','ntext','image')
-		)
-	
-		-- do all as offline for box edition that does not support online
-		update #idxBefore set OnlineOpIsNotSupported=1  
-			where /* Editions that does not support online operation in case this has been used with on-prem server */
-				convert(varchar(100),serverproperty('Edition')) like '%Express%' 
-				or convert(varchar(100),serverproperty('Edition')) like '%Standard%'
-				or convert(varchar(100),serverproperty('Edition')) like '%Web%'
-		
-		-- Do non resumable operation when index contains computed column or timestamp data type
-		update idx set ObjectDoesNotSupportResumableOperation=1
-		from #idxBefore idx join sys.index_columns ic on idx.object_id = ic.object_id and idx.index_id=ic.index_id
-		join sys.columns c on ic.object_id=c.object_id and ic.column_id=c.column_id
-		where c.is_computed=1 or system_type_id=189 /*TimeStamp column*/
-		
-		-- set SkipIndex=1 if conditions for maintenance are not met
-		-- this is used to idntify is stats need to be updated or not. 
-		-- Check#1 - if table is too small
-		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as table is too small'
-		where (
-					/*Table is small*/
-					(page_count<=@minPageCountForIndex)
-				)
-				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
-		
-		-- Check#2 - if table is not small and fragmentation % is too low 
-		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as fragmentation % is low'
-		where (
-					/*Table is big enough - but fragmentation is less than 5%*/
-					(page_count>@minPageCountForIndex and avg_fragmentation_in_percent<5)
-				)
-				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
-		
-		-- Skip columnstore indexes
-		update #idxBefore set SkipIndex=1,SkipReason='Columnstore index'
-		where (
-					type in (
-								5/*Clustered columnstore index*/,
-								6/*Nonclustered columnstore index*/
-							)
-				)
-				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
+        /*Write operation parameters*/
+        RAISERROR('-----------------------', 0, 0);
+        SET @msg = N'set operation = ' + @operation;
+        RAISERROR(@msg, 0, 0);
+        SET @msg = N'set mode = ' + @mode;
+        RAISERROR(@msg, 0, 0);
+        SET @msg = N'set ResumableIndexRebuild = ' + CAST(@ResumableIndexRebuild AS VARCHAR(1));
+        RAISERROR(@msg, 0, 0);
+        SET @msg = N'set RebuildHeaps = ' + CAST(@RebuildHeaps AS VARCHAR(1));
+        RAISERROR(@msg, 0, 0);
+        SET @msg = N'set LogToTable = ' + CAST(@LogToTable AS VARCHAR(1));
+        RAISERROR(@msg, 0, 0);
+        IF @debug <> 'none'
+        BEGIN
+            SET @msg = N'set Debug = ' + CAST(@debug AS VARCHAR(20));
+            RAISERROR(@msg, 0, 0);
+        END;
+        IF @WorkOnSchema IS NOT NULL
+        BEGIN
+            SET @msg = N'set Shcema = ' + CAST(@WorkOnSchema AS sysname);
+            RAISERROR(@msg, 0, 0);
+        END;
+        RAISERROR('-----------------------', 0, 0);
+    END;
 
-		/*Add information about dummy mode*/
-		update #idxBefore set TSQLCommandExtraInfo = TSQLCommandExtraInfo + 'Dummy mode '
-		where @mode='dummy' and type !=0
+    IF @LogToTable = 1
+        INSERT INTO dbo.AzureSQLMaintenanceLog
+        VALUES
+        (@OperationTime, NULL, NULL, SYSDATETIME(), SYSDATETIME(),
+         'Starting operation: Operation=' + @operation + ' Mode=' + @mode + ' Keep log for last '
+         + CAST(@KeepXOperationInLog AS VARCHAR(10)) + ' operations');
 
-		/* choose index operation Rebuild or Reorginize*/
-		update #idxBefore set IndexOperation='REORGANIZE ',
-		TSQLCommandExtraInfo = TSQLCommandExtraInfo + 'columnstore index detected - reorginize'
-		where @mode='dummy' and type in (5,6)/* Columnstore indexes in dummy mode -> reorganize them */
+    -- create command queue table, if there table exits then we resume operation in earlier stage.
+    IF @operation != 'resume'
+        CREATE TABLE dbo.AzureSQLMaintenanceCMDQueue
+        (
+            ID INT IDENTITY PRIMARY KEY,
+            txtCMD NVARCHAR(MAX),
+            ExtraInfo VARCHAR(MAX)
+        );
 
-		update #idxBefore set IndexOperation='REORGANIZE '
-		where avg_fragmentation_in_percent between 5 and 30 and @mode = 'smart'/* index fragmentation condition */ 
-		and type!=0 /*avoid heaps*/
-
-		-- all else should go for rebuild
-		update #idxBefore set IndexOperation='REBUILD '
-		where type not in (0,5,6) /*Heaps and CS indexes*/
-
-		update #idxBefore set TSQLCommandExtraInfo = TSQLCommandExtraInfo + ' Current fragmentation: ' + format(avg_fragmentation_in_percent/100,'p')+ ' with ' + cast(page_count as nvarchar(20)) + ' pages'
-		where IndexOperation != ''
-
-		raiserror('---------------------------------------',0,0) with nowait
-		raiserror('Index Information:',0,0) with nowait
-		raiserror('---------------------------------------',0,0) with nowait
-
-		select @msg = count(*) from #idxBefore 
-		set @msg = 'Total Indexes: ' + @msg
-		raiserror(@msg,0,0) with nowait
-
-		select @msg = avg(avg_fragmentation_in_percent) from #idxBefore where page_count>@minPageCountForIndex
-		set @msg = 'Average Fragmentation: ' + @msg
-		raiserror(@msg,0,0) with nowait
-
-		select @msg = sum(iif(avg_fragmentation_in_percent>=5 and page_count>@minPageCountForIndex,1,0)) from #idxBefore 
-		set @msg = 'Fragmented Indexes: ' + @msg
-		raiserror(@msg,0,0) with nowait
-
-				
-		raiserror('---------------------------------------',0,0) with nowait
+    ---------------------------------------------
+    --- Check if engine support resumable index operation
+    ---------------------------------------------
+    IF @ResumableIndexRebuild = 1
+    BEGIN
+        IF CAST(SERVERPROPERTY('EngineEdition') AS INT) >= 5
+           OR CAST(SERVERPROPERTY('ProductMajorVersion') AS INT) >= 14
+        BEGIN
+            SET @ResumableIndexRebuildSupported = 1;
+        END;
+        ELSE
+        BEGIN
+            SET @ResumableIndexRebuildSupported = 0;
+            SET @msg = N'Resumable index rebuild is not supported on this database';
+            RAISERROR(@msg, 0, 0);
+            IF @LogToTable = 1
+                INSERT INTO dbo.AzureSQLMaintenanceLog
+                VALUES
+                (@OperationTime, NULL, NULL, SYSDATETIME(), SYSDATETIME(), @msg);
+        END;
+    END;
 
 
-		/* Choose the identifier to be used based on existing object name 
+    ---------------------------------------------
+    --- Index maintenance
+    ---------------------------------------------
+    IF @operation IN ( 'index', 'all' )
+    BEGIN
+        /**/
+        IF @mode = 'smart'
+           AND @RebuildHeaps = 1
+            SET @indexStatsMode = 'SAMPLED';
+        ELSE
+            SET @indexStatsMode = 'LIMITED';
+
+        RAISERROR('Get index information...(wait)', 0, 0) WITH NOWAIT;
+        /* Get Index Information */
+        SELECT idxs.[object_id],
+               ObjectSchema = sc.name,
+               ObjectName = SO.name,
+               IndexName = idxs.name,
+               idxs.type,
+               idxs.type_desc,
+               i.avg_fragmentation_in_percent,
+               i.page_count,
+               i.index_id,
+               i.partition_number,
+               i.avg_page_space_used_in_percent,
+               i.record_count,
+               i.ghost_record_count,
+               i.forwarded_record_count,
+               NULL AS OnlineOpIsNotSupported,
+               NULL AS ObjectDoesNotSupportResumableOperation,
+               CASE
+                   WHEN ds.type = 'PS' THEN
+                       1
+                   ELSE
+                       0
+               END AS IsPartitioned,
+               0 AS SkipIndex,
+               CAST('' AS NVARCHAR(100)) AS IndexOperation,
+               CAST('' AS NVARCHAR(MAX)) AS TSQLCommand,
+               CAST('' AS NVARCHAR(MAX)) AS TSQLCommandExtraInfo,
+               REPLICATE('', 128) AS SkipReason
+        INTO #idxBefore
+        FROM sys.indexes idxs
+            INNER JOIN sys.objects [SO]
+                ON [SO].object_id = [idxs].object_id
+                   AND [SO].[type] IN ( 'U', 'V' )
+            INNER JOIN sys.schemas sc
+                ON sc.schema_id = SO.schema_id
+            INNER JOIN sys.data_spaces ds
+                ON idxs.data_space_id = ds.data_space_id
+            LEFT JOIN sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, @indexStatsMode) i
+                ON i.object_id = idxs.object_id
+                   AND i.index_id = idxs.index_id
+        WHERE idxs.type IN ( 0 /*HEAP*/, 1 /*CLUSTERED*/, 2 /*NONCLUSTERED*/, 5 /*CLUSTERED COLUMNSTORE*/, 6 /*NONCLUSTERED COLUMNSTORE*/ )
+              AND
+              (
+                  alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/
+                  OR alloc_unit_type_desc IS NULL /*for ColumnStore indexes*/
+              )
+              AND sc.name <> 'sys'
+              AND
+              (
+                  @WorkOnSchema IS NULL
+                  OR sc.name = @WorkOnSchema
+              )
+              AND idxs.is_disabled = 0
+        ORDER BY i.avg_fragmentation_in_percent DESC,
+                 i.page_count DESC;
+
+        -- mark indexes XML,spatial and columnstore not to run online update 
+        UPDATE #idxBefore
+        SET OnlineOpIsNotSupported = 1
+        WHERE [object_id] IN
+              (
+                  SELECT [object_id] FROM #idxBefore WHERE [type] = 3 /*XML Indexes*/
+              );
+
+        -- mark clustered indexes for tables with 'text','ntext','image' to rebuild offline
+        UPDATE #idxBefore
+        SET OnlineOpIsNotSupported = 1
+        WHERE index_id = 1 /*clustered*/
+              AND [object_id] IN
+                  (
+                      SELECT c.object_id
+                      FROM sys.columns c
+                          JOIN sys.types t
+                              ON c.user_type_id = t.user_type_id
+                      WHERE t.name IN ( 'text', 'ntext', 'image' )
+                  );
+
+        -- do all as offline for box edition that does not support online
+        UPDATE #idxBefore
+        SET OnlineOpIsNotSupported = 1
+        WHERE /* Editions that does not support online operation in case this has been used with on-prem server */
+            CONVERT(VARCHAR(100), SERVERPROPERTY('Edition')) LIKE '%Express%'
+            OR CONVERT(VARCHAR(100), SERVERPROPERTY('Edition')) LIKE '%Standard%'
+            OR CONVERT(VARCHAR(100), SERVERPROPERTY('Edition')) LIKE '%Web%';
+
+        -- Do non resumable operation when index contains computed column or timestamp data type
+        UPDATE idx
+        SET ObjectDoesNotSupportResumableOperation = 1
+        FROM #idxBefore idx
+            JOIN sys.index_columns ic
+                ON idx.object_id = ic.object_id
+                   AND idx.index_id = ic.index_id
+            JOIN sys.columns c
+                ON ic.object_id = c.object_id
+                   AND ic.column_id = c.column_id
+        WHERE c.is_computed = 1
+              OR c.system_type_id = 189; /*TimeStamp column*/
+
+        -- set SkipIndex=1 if conditions for maintenance are not met
+        -- this is used to idntify is stats need to be updated or not. 
+        -- Check#1 - if table is too small
+        UPDATE #idxBefore
+        SET SkipIndex = 1,
+            SkipReason = 'Maintenance is not needed as table is too small'
+        WHERE (
+            /*Table is small*/
+            (page_count <= @minPageCountForIndex)
+              )
+              AND @mode <> 'dummy'; /*for Dummy mode we do not want to skip anything */
+
+        -- Check#2 - if table is not small and fragmentation % is too low 
+        UPDATE #idxBefore
+        SET SkipIndex = 1,
+            SkipReason = 'Maintenance is not needed as fragmentation % is low'
+        WHERE (
+            /*Table is big enough - but fragmentation is less than 5%*/
+            (
+                page_count > @minPageCountForIndex
+                AND avg_fragmentation_in_percent < 5
+            )
+              )
+              AND @mode <> 'dummy'; /*for Dummy mode we do not want to skip anything */
+
+        -- Skip columnstore indexes
+        UPDATE #idxBefore
+        SET SkipIndex = 1,
+            SkipReason = 'Columnstore index'
+        WHERE (type IN (   5, /*Clustered columnstore index*/
+                           6  /*Nonclustered columnstore index*/
+                       )
+              )
+              AND @mode != 'dummy'; /*for Dummy mode we do not want to skip anything */
+
+        /*Add information about dummy mode*/
+        UPDATE #idxBefore
+        SET TSQLCommandExtraInfo = TSQLCommandExtraInfo + 'Dummy mode '
+        WHERE @mode = 'dummy'
+              AND type <> 0;
+
+        /* choose index operation Rebuild or Reorginize*/
+        UPDATE #idxBefore
+        SET IndexOperation = 'REORGANIZE ',
+            TSQLCommandExtraInfo = TSQLCommandExtraInfo + 'columnstore index detected - reorginize'
+        WHERE @mode = 'dummy'
+              AND type IN ( 5, 6 ); /* Columnstore indexes in dummy mode -> reorganize them */
+
+        UPDATE #idxBefore
+        SET IndexOperation = 'REORGANIZE '
+        WHERE avg_fragmentation_in_percent
+              BETWEEN 5 AND 30
+              AND @mode = 'smart' /* index fragmentation condition */
+              AND type <> 0; /*avoid heaps*/
+
+        -- all else should go for rebuild
+        UPDATE #idxBefore
+        SET IndexOperation = 'REBUILD '
+        WHERE type NOT IN ( 0, 5, 6 ); /*Heaps and CS indexes*/
+
+        UPDATE #idxBefore
+        SET TSQLCommandExtraInfo = TSQLCommandExtraInfo + ' Current fragmentation: '
+                                   + FORMAT(avg_fragmentation_in_percent / 100, 'p') + ' with '
+                                   + CAST(page_count AS NVARCHAR(20)) + ' pages'
+        WHERE IndexOperation <> '';
+
+        RAISERROR('---------------------------------------', 0, 0) WITH NOWAIT;
+        RAISERROR('Index Information:', 0, 0) WITH NOWAIT;
+        RAISERROR('---------------------------------------', 0, 0) WITH NOWAIT;
+
+        SELECT @msg = COUNT(*)
+        FROM #idxBefore;
+        SET @msg = N'Total Indexes: ' + @msg;
+        RAISERROR(@msg, 0, 0) WITH NOWAIT;
+
+        SELECT @msg = AVG(avg_fragmentation_in_percent)
+        FROM #idxBefore
+        WHERE page_count > @minPageCountForIndex;
+        SET @msg = N'Average Fragmentation: ' + @msg;
+        RAISERROR(@msg, 0, 0) WITH NOWAIT;
+
+        SELECT @msg = SUM(IIF(avg_fragmentation_in_percent >= 5 AND page_count > @minPageCountForIndex, 1, 0))
+        FROM #idxBefore;
+        SET @msg = N'Fragmented Indexes: ' + @msg;
+        RAISERROR(@msg, 0, 0) WITH NOWAIT;
+
+
+        RAISERROR('---------------------------------------', 0, 0) WITH NOWAIT;
+
+
+        /* Choose the identifier to be used based on existing object name 
 			this came up from object that contains '[' within the object name
 			such as "EPK[export].[win_sourceofwealthbpf]" as index name
 			if we use '[' as identifier it will cause wrong identifier name	
 		*/
-		if exists(
-			select 1
-			from #idxBefore 
-			where IndexName like '%[%' or IndexName like '%]%'
-			or ObjectSchema like '%[%' or ObjectSchema like '%]%'
-			or ObjectName like '%[%' or ObjectName like '%]%'
-			)
-		begin
-			set @idxIdentifierBegin = '"'
-			set @idxIdentifierEnd = '"'
-		end
-		else 
-		begin
-			set @idxIdentifierBegin = '['
-			set @idxIdentifierEnd = ']'
-		end
+        IF EXISTS
+        (
+            SELECT 1
+            FROM #idxBefore
+            WHERE IndexName LIKE '%[%'
+                  OR IndexName LIKE '%]%'
+                  OR ObjectSchema LIKE '%[%'
+                  OR ObjectSchema LIKE '%]%'
+                  OR ObjectName LIKE '%[%'
+                  OR ObjectName LIKE '%]%'
+        )
+        BEGIN
+            SET @idxIdentifierBegin = '"';
+            SET @idxIdentifierEnd = '"';
+        END;
+        ELSE
+        BEGIN
+            SET @idxIdentifierBegin = '[';
+            SET @idxIdentifierEnd = ']';
+        END;
 
-		/* Build Index maintenance command  - Aletr index command */ 
-		update #idxBefore set TSQLCommand = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '+ @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' ' 
-		where type!=0 /*avoid heaps*/ and SkipIndex=0
+        /* Build Index maintenance command  - Aletr index command */
+        UPDATE #idxBefore
+        SET TSQLCommand = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '
+                          + @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd + '.' + @idxIdentifierBegin
+                          + ObjectName + @idxIdentifierEnd + ' '
+        WHERE type != 0 /*avoid heaps*/
+              AND SkipIndex = 0;
 
-		/* Build Index maintenance command  - add rebuild or reorginize */ 
-		update #idxBefore set TSQLCommand = TSQLCommand + IndexOperation + ' '
-		
-		/* Build Index maintenance command  - Rebuid or Reorginize */ 
-		update #idxBefore set TSQLCommand = TSQLCommand + 
-			case when 
-			IsPartitioned = 1 then 'PARTITION=' + cast(partition_number as nvarchar(max)) + ' '
-			else ''
-			end
-		where type!=0 /*avoid heaps*/ and SkipIndex=0
+        /* Build Index maintenance command  - add rebuild or reorginize */
+        UPDATE #idxBefore
+        SET TSQLCommand = TSQLCommand + IndexOperation + ' ';
 
-		/* Build Index maintenance command  - MAXDOP and Online or offline */ 
-		update #idxBefore set TSQLCommand = TSQLCommand + 'WITH(MAXDOP=1,ONLINE='+
-			case when OnlineOpIsNotSupported=1 then 'OFF'
-			else 'ON'
-			end
-		where type!=0 /*avoid heaps*/ and SkipIndex=0
+        /* Build Index maintenance command  - Rebuid or Reorginize */
+        UPDATE #idxBefore
+        SET TSQLCommand = TSQLCommand + CASE
+                                            WHEN IsPartitioned = 1 THEN
+                                                'PARTITION=' + CAST(partition_number AS NVARCHAR(MAX)) + ' '
+                                            ELSE
+                                                ''
+                                        END
+        WHERE type != 0 /*avoid heaps*/
+              AND SkipIndex = 0;
 
-		/* Build Index maintenance command  - Resumable Operation */ 
-		update #idxBefore set TSQLCommand = TSQLCommand +
-			case when @ResumableIndexRebuild=1 and ObjectDoesNotSupportResumableOperation=0 and @ResumableIndexRebuildSupported=1
-				then 'RESUMABLE=ON' 
-				else ''
-				end
-		where type!=0 /*avoid heaps*/ and SkipIndex=0
-		
-		/* Build Index maintenance command  - Closing the line of TSQL */ 
-			update #idxBefore set TSQLCommand = TSQLCommand + ');'			
-			where type!=0 /*avoid heaps*/ and SkipIndex=0
-		
-		/* Tranfer commands to command queue table*/
-		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
-			select TSQLCommand, TSQLCommandExtraInfo from #idxBefore
-			where type!=0 /*avoid heaps*/ and SkipIndex=0
+        /* Build Index maintenance command  - MAXDOP and Online or offline */
+        UPDATE #idxBefore
+        SET TSQLCommand = TSQLCommand + 'WITH(MAXDOP=1,ONLINE=' + CASE
+                                                                      WHEN OnlineOpIsNotSupported = 1 THEN
+                                                                          'OFF'
+                                                                      ELSE
+                                                                          'ON'
+                                                                  END
+        WHERE type != 0 /*avoid heaps*/
+              AND SkipIndex = 0;
 
-		---------------------------------------------
-		--- Index - Heaps 
-		---------------------------------------------
+        /* Build Index maintenance command  - Resumable Operation */
+        UPDATE #idxBefore
+        SET TSQLCommand = TSQLCommand + CASE
+                                            WHEN @ResumableIndexRebuild = 1
+                                                 AND ObjectDoesNotSupportResumableOperation = 0
+                                                 AND @ResumableIndexRebuildSupported = 1 THEN
+                                                'RESUMABLE=ON'
+                                            ELSE
+                                                ''
+                                        END
+        WHERE type != 0 /*avoid heaps*/
+              AND SkipIndex = 0;
 
-		/* create queue for heaps */
-		if @RebuildHeaps=1 
-		begin
-			insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
-			select 
-			txtCMD = 'ALTER TABLE ' + @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' REBUILD;' 
-			, ExtraInfo = 'Rebuilding heap - forwarded records ' + cast(forwarded_record_count as varchar(100)) + ' out of ' + cast(record_count as varchar(100)) + ' record in the table'
-			from #idxBefore
-			where
-				type = 0 /*heaps*/
-				and 
-					(
-						@mode='dummy' 
-						or 
-						(forwarded_record_count/nullif(record_count,0)>0.3) /* 30% of record count */
-						or
-						(forwarded_record_count>105000) /* for tables with > 350K rows dont wait for 30%, just run yje maintenance once we reach the 100K forwarded records */
-					)
-		end /* create queue for heaps */
-	end
+        /* Build Index maintenance command  - Closing the line of TSQL */
+        UPDATE #idxBefore
+        SET TSQLCommand = TSQLCommand + ');'
+        WHERE type != 0 /*avoid heaps*/
+              AND SkipIndex = 0;
+
+        /* Tranfer commands to command queue table*/
+        INSERT INTO dbo.AzureSQLMaintenanceCMDQueue
+        (
+            txtCMD,
+            ExtraInfo
+        )
+        SELECT TSQLCommand,
+               TSQLCommandExtraInfo
+        FROM #idxBefore
+        WHERE type != 0 /*avoid heaps*/
+              AND SkipIndex = 0;
+
+        ---------------------------------------------
+        --- Index - Heaps 
+        ---------------------------------------------
+
+        /* create queue for heaps */
+        IF @RebuildHeaps = 1
+        BEGIN
+            INSERT INTO dbo.AzureSQLMaintenanceCMDQueue
+            (
+                txtCMD,
+                ExtraInfo
+            )
+            SELECT txtCMD = 'ALTER TABLE ' + @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd + '.'
+                            + @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' REBUILD;',
+                   ExtraInfo = 'Rebuilding heap - forwarded records ' + CAST(forwarded_record_count AS VARCHAR(100))
+                               + ' out of ' + CAST(record_count AS VARCHAR(100)) + ' record in the table'
+            FROM #idxBefore
+            WHERE type = 0 /*heaps*/
+                  AND
+                  (
+                      @mode = 'dummy'
+                      OR (forwarded_record_count / NULLIF(record_count, 0) > 0.3) /* 30% of record count */
+                      OR (forwarded_record_count > 105000)/* for tables with > 350K rows dont wait for 30%, just run yje maintenance once we reach the 100K forwarded records */
+                  );
+        END; /* create queue for heaps */
+    END;
 
 
 
-	---------------------------------------------
-	--- Statistics maintenance
-	---------------------------------------------
+    ---------------------------------------------
+    --- Statistics maintenance
+    ---------------------------------------------
 
-	if @operation in('statistics','all')
-	begin 
-		/*Gets Stats for database*/
-		raiserror('Get statistics information...',0,0) with nowait;
-		select 
-			ObjectSchema = OBJECT_SCHEMA_NAME(s.object_id)
-			,ObjectName = object_name(s.object_id) 
-			,s.object_id
-			,s.stats_id
-			,StatsName = s.name
-			,sp.last_updated
-			,sp.rows
-			,sp.rows_sampled
-			,sp.modification_counter
-			, i.type
-			, i.type_desc
-			,0 as SkipStatistics
-		into #statsBefore
-		from sys.stats s cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp 
-		left join sys.indexes i on sp.object_id = i.object_id and sp.stats_id = i.index_id
-		where OBJECT_SCHEMA_NAME(s.object_id) != 'sys' and (@WorkOnSchema is null or OBJECT_SCHEMA_NAME(s.object_id) = @WorkOnSchema)
-		and /*Modified stats or Dummy mode*/(isnull(sp.modification_counter,0)>0 or @mode='dummy')
-		order by sp.last_updated asc
+    IF @operation IN ( 'statistics', 'all' )
+    BEGIN
+        /*Gets Stats for database*/
+        RAISERROR('Get statistics information...', 0, 0) WITH NOWAIT;
+        SELECT ObjectSchema = OBJECT_SCHEMA_NAME(s.object_id),
+               ObjectName = OBJECT_NAME(s.object_id),
+               s.object_id,
+               s.stats_id,
+               StatsName = s.name,
+               sp.last_updated,
+               sp.rows,
+               sp.rows_sampled,
+               sp.modification_counter,
+               i.type,
+               i.type_desc,
+               0 AS SkipStatistics
+        INTO #statsBefore
+        FROM sys.stats s
+            CROSS APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) sp
+            LEFT JOIN sys.indexes i
+                ON sp.object_id = i.object_id
+                   AND sp.stats_id = i.index_id
+        WHERE OBJECT_SCHEMA_NAME(s.object_id) != 'sys'
+              AND
+              (
+                  @WorkOnSchema IS NULL
+                  OR OBJECT_SCHEMA_NAME(s.object_id) = @WorkOnSchema
+              )
+              AND /*Modified stats or Dummy mode*/
+              (
+                  ISNULL(sp.modification_counter, 0) > 0
+                  OR @mode = 'dummy'
+              )
+        ORDER BY sp.last_updated ASC;
 
-		/*Remove statistics if it is handled by index rebuild / reorginize 
+        /*Remove statistics if it is handled by index rebuild / reorginize 
 		I am removing statistics based on existance on the index in the list because for indexes with <5% changes we do not apply
 		any action - therefore we might decide to update statistics */
-		if @operation= 'all'
-		update _stats set SkipStatistics=1 
-			from #statsBefore _stats
-			join #idxBefore _idx
-			on _idx.ObjectSchema = _stats.ObjectSchema
-			and _idx.ObjectName = _stats.ObjectName
-			and _idx.IndexName = _stats.StatsName 
-			where _idx.SkipIndex=0
+        IF @operation = 'all'
+            UPDATE _stats
+            SET SkipStatistics = 1
+            FROM #statsBefore _stats
+                JOIN #idxBefore _idx
+                    ON _idx.ObjectSchema = _stats.ObjectSchema
+                       AND _idx.ObjectName = _stats.ObjectName
+                       AND _idx.IndexName = _stats.StatsName
+            WHERE _idx.SkipIndex = 0;
 
-		/*Skip statistics for Columnstore indexes*/
-		update #statsBefore set SkipStatistics=1
-		where type in (5,6) /*Column store indexes*/
+        /*Skip statistics for Columnstore indexes*/
+        UPDATE #statsBefore
+        SET SkipStatistics = 1
+        WHERE type IN ( 5, 6 ); /*Column store indexes*/
 
-		/*Skip statistics if resumable operation is pause on the same object*/
-		if @ResumableIndexRebuildSupported=1
-		begin
-			update _stats set SkipStatistics=1
-			from #statsBefore _stats join sys.index_resumable_operations iro on _stats.object_id=iro.object_id and _stats.stats_id=iro.index_id
-		end
-		
-		raiserror('---------------------------------------',0,0) with nowait
-		raiserror('Statistics Information:',0,0) with nowait
-		raiserror('---------------------------------------',0,0) with nowait
+        /*Skip statistics if resumable operation is pause on the same object*/
+        IF @ResumableIndexRebuildSupported = 1
+        BEGIN
+            UPDATE _stats
+            SET SkipStatistics = 1
+            FROM #statsBefore _stats
+                JOIN sys.index_resumable_operations iro
+                    ON _stats.object_id = iro.object_id
+                       AND _stats.stats_id = iro.index_id;
+        END;
 
-		select @msg = sum(modification_counter) from #statsBefore
-		set @msg = 'Total Modifications: ' + @msg
-		raiserror(@msg,0,0) with nowait
-		
-		select @msg = sum(iif(modification_counter>0,1,0)) from #statsBefore
-		set @msg = 'Modified Statistics: ' + @msg
-		raiserror(@msg,0,0) with nowait
-				
-		raiserror('---------------------------------------',0,0) with nowait
+        RAISERROR('---------------------------------------', 0, 0) WITH NOWAIT;
+        RAISERROR('Statistics Information:', 0, 0) WITH NOWAIT;
+        RAISERROR('---------------------------------------', 0, 0) WITH NOWAIT;
 
-		/* Choose the identifier to be used based on existing object name */
-		if exists(
-			select 1
-			from #statsBefore 
-			where StatsName like '%[%' or StatsName like '%]%'
-			or ObjectSchema like '%[%' or ObjectSchema like '%]%'
-			or ObjectName like '%[%' or ObjectName like '%]%'
-			)
-		begin
-			set @statsIdentifierBegin = '"'
-			set @statsIdentifierEnd = '"'
-		end
-		else 
-		begin
-			set @statsIdentifierBegin = '['
-			set @statsIdentifierEnd = ']'
-		end
-		
-		/* create queue for update stats */
-		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
-		select 
-		txtCMD = 'UPDATE STATISTICS '+ @statsIdentifierBegin + ObjectSchema + +@statsIdentifierEnd + '.'+@statsIdentifierBegin + ObjectName + @statsIdentifierEnd +' (' + @statsIdentifierBegin + StatsName + @statsIdentifierEnd + ') WITH FULLSCAN;'
-		, ExtraInfo = '#rows:' + cast([rows] as varchar(100)) + ' #modifications:' + cast(modification_counter as varchar(100)) + ' modification percent: ' + format((1.0 * modification_counter/ rows ),'p')
-		from #statsBefore
-		where SkipStatistics=0;
-	end
+        SELECT @msg = SUM(modification_counter)
+        FROM #statsBefore;
+        SET @msg = N'Total Modifications: ' + @msg;
+        RAISERROR(@msg, 0, 0) WITH NOWAIT;
 
-	if @operation in('statistics','index','all','resume')
-	begin
+        SELECT @msg = SUM(IIF(modification_counter > 0, 1, 0))
+        FROM #statsBefore;
+        SET @msg = N'Modified Statistics: ' + @msg;
+        RAISERROR(@msg, 0, 0) WITH NOWAIT;
 
-		declare @SQLCMD nvarchar(max);
-		declare @ID int;
-		declare @ExtraInfo nvarchar(max);
-	
-		/*Print debug information in case debug is activated */
-		if @debug!='none'
-		begin
-			drop table if exists idxBefore
-			drop table if exists statsBefore
-			drop table if exists cmdQueue
-			if object_id('tempdb..#idxBefore') is not null select * into idxBefore from #idxBefore
-			if object_id('tempdb..#statsBefore') is not null select * into statsBefore from #statsBefore
-			if object_id('AzureSQLMaintenanceCMDQueue') is not null select * into cmdQueue from AzureSQLMaintenanceCMDQueue
-		end
+        RAISERROR('---------------------------------------', 0, 0) WITH NOWAIT;
 
-		/*Save current execution parameters in case resume is needed */
-		if @operation!='resume'
-		begin
-			set @ExtraInfo = (select top 1 LogToTable = @LogToTable, operation=@operation, operationTime=@OperationTime, mode=@mode, ResumableIndexRebuild = @ResumableIndexRebuild, debug=@debug from sys.tables for JSON path, WITHOUT_ARRAY_WRAPPER)
-			set identity_insert AzureSQLMaintenanceCMDQueue on
-			insert into AzureSQLMaintenanceCMDQueue(ID,txtCMD,ExtraInfo) values(-1,'parameters to be used by resume code path',@ExtraInfo)
-			set identity_insert AzureSQLMaintenanceCMDQueue off
-		end
-	
-		---------------------------------------------
-		--- Executing commands
-		---------------------------------------------
-		/*
+        /* Choose the identifier to be used based on existing object name */
+        IF EXISTS
+        (
+            SELECT 1
+            FROM #statsBefore
+            WHERE StatsName LIKE '%[%'
+                  OR StatsName LIKE '%]%'
+                  OR ObjectSchema LIKE '%[%'
+                  OR ObjectSchema LIKE '%]%'
+                  OR ObjectName LIKE '%[%'
+                  OR ObjectName LIKE '%]%'
+        )
+        BEGIN
+            SET @statsIdentifierBegin = '"';
+            SET @statsIdentifierEnd = '"';
+        END;
+        ELSE
+        BEGIN
+            SET @statsIdentifierBegin = '[';
+            SET @statsIdentifierEnd = ']';
+        END;
+
+        /* create queue for update stats */
+        INSERT INTO dbo.AzureSQLMaintenanceCMDQueue
+        (
+            txtCMD,
+            ExtraInfo
+        )
+        SELECT txtCMD = 'UPDATE STATISTICS ' + @statsIdentifierBegin + ObjectSchema + +@statsIdentifierEnd + '.'
+                        + @statsIdentifierBegin + ObjectName + @statsIdentifierEnd + ' (' + @statsIdentifierBegin
+                        + StatsName + @statsIdentifierEnd + ') WITH FULLSCAN;',
+               ExtraInfo = '#rows:' + CAST([rows] AS VARCHAR(100)) + ' #modifications:'
+                           + CAST(modification_counter AS VARCHAR(100)) + ' modification percent: '
+                           + FORMAT((1.0 * modification_counter / rows), 'p')
+        FROM #statsBefore
+        WHERE SkipStatistics = 0;
+    END;
+
+    IF @operation IN ( 'statistics', 'index', 'all', 'resume' )
+    BEGIN
+
+        DECLARE @SQLCMD NVARCHAR(MAX);
+        DECLARE @ID INT;
+        DECLARE @ExtraInfo NVARCHAR(MAX);
+
+        /*Print debug information in case debug is activated */
+        IF @debug != 'none'
+        BEGIN
+            DROP TABLE IF EXISTS idxBefore;
+            DROP TABLE IF EXISTS statsBefore;
+            DROP TABLE IF EXISTS cmdQueue;
+            IF OBJECT_ID('tempdb..#idxBefore') IS NOT NULL
+                SELECT *
+                INTO dbo.idxBefore
+                FROM #idxBefore;
+            IF OBJECT_ID('tempdb..#statsBefore') IS NOT NULL
+                SELECT *
+                INTO dbo.statsBefore
+                FROM #statsBefore;
+            IF OBJECT_ID('AzureSQLMaintenanceCMDQueue') IS NOT NULL
+                SELECT *
+                INTO dbo.cmdQueue
+                FROM dbo.AzureSQLMaintenanceCMDQueue;
+        END;
+
+        /*Save current execution parameters in case resume is needed */
+        IF @operation != 'resume'
+        BEGIN
+            SET @ExtraInfo =
+            (
+                SELECT TOP 1
+                       LogToTable = @LogToTable,
+                       operation = @operation,
+                       operationTime = @OperationTime,
+                       mode = @mode,
+                       ResumableIndexRebuild = @ResumableIndexRebuild,
+                       debug = @debug
+                FROM sys.tables
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            );
+            SET IDENTITY_INSERT AzureSQLMaintenanceCMDQueue ON;
+            INSERT INTO dbo.AzureSQLMaintenanceCMDQueue
+            (
+                ID,
+                txtCMD,
+                ExtraInfo
+            )
+            VALUES
+            (-1, 'parameters to be used by resume code path', @ExtraInfo);
+            SET IDENTITY_INSERT AzureSQLMaintenanceCMDQueue OFF;
+        END;
+
+        ---------------------------------------------
+        --- Executing commands
+        ---------------------------------------------
+        /*
 		needed to rebuild indexes on comuted columns
 		if ANSI_WARNINGS is set to OFF we might get the followin exception:
 			Msg 1934, Level 16, State 1, Line 2
 			ALTER INDEX failed because the following SET options have incorrect settings: 'ANSI_WARNINGS'. Verify that SET options are correct for use with indexed views and/or indexes on computed columns and/or filtered indexes and/or query notifications and/or XML data type methods and/or spatial index operations.
 		*/
-		SET ANSI_WARNINGS ON;
+        SET ANSI_WARNINGS ON;
 
-		raiserror('Start executing commands...',0,0) with nowait
-		if @debug='whatif' raiserror('*** whatif mode ***',0,0) with nowait
-		declare @T table(ID int, txtCMD nvarchar(max),ExtraInfo nvarchar(max));
-		while exists(select * from AzureSQLMaintenanceCMDQueue where ID>0)
-		begin
-			update top (1) AzureSQLMaintenanceCMDQueue set txtCMD=txtCMD output deleted.* into @T where ID>0;
-			select top (1) @ID = ID, @SQLCMD = txtCMD, @ExtraInfo=ExtraInfo from @T
-			raiserror(@SQLCMD,0,0) with nowait
-			if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,@SQLCMD,@ExtraInfo,sysdatetime(),null,'Started')
-			begin try
-				if @debug != 'whatif' exec(@SQLCMD)	
-				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = iif(@debug='whatif','not executed - whatif mode','Succeeded') where id=SCOPE_IDENTITY()
-			end try
-			begin catch
-				set @ScriptHasAnError=1;
-				set @msg = 'FAILED : ' + CAST(ERROR_NUMBER() AS VARCHAR(50)) + ERROR_MESSAGE();
-				raiserror(@msg,0,0) with nowait
-				if @LogToTable=1 update AzureSQLMaintenanceLog set EndTime = sysdatetime(), StatusMessage = @msg where id=SCOPE_IDENTITY()
-			end catch
-			delete from AzureSQLMaintenanceCMDQueue where ID = @ID;
-			delete from @T
-		end
-		drop table AzureSQLMaintenanceCMDQueue;
-	end
-	
-	---------------------------------------------
-	--- Clean old records from log table
-	---------------------------------------------
-	if @LogToTable=1 
-	begin
-		delete from AzureSQLMaintenanceLog 
-		from 
-			AzureSQLMaintenanceLog L join 
-			(select distinct OperationTime from AzureSQLMaintenanceLog order by OperationTime desc offset @KeepXOperationInLog rows) F
-				ON L.OperationTime = F.OperationTime
-		insert into AzureSQLMaintenanceLog values(@OperationTime,null,cast(@@rowcount as varchar(100))+ ' rows purged from log table because number of operations to keep is set to: ' + cast( @KeepXOperationInLog as varchar(100)),sysdatetime(),sysdatetime(),'Cleanup Log Table')
-	end
+        RAISERROR('Start executing commands...', 0, 0) WITH NOWAIT;
+        IF @debug = 'whatif'
+            RAISERROR('*** whatif mode ***', 0, 0) WITH NOWAIT;
+        DECLARE @T TABLE
+        (
+            ID INT,
+            txtCMD NVARCHAR(MAX),
+            ExtraInfo NVARCHAR(MAX)
+        );
+        WHILE EXISTS (SELECT * FROM dbo.AzureSQLMaintenanceCMDQueue WHERE ID > 0)
+        BEGIN
+            UPDATE TOP (1)
+                dbo.AzureSQLMaintenanceCMDQueue
+            SET txtCMD = txtCMD
+            OUTPUT deleted.*
+            INTO @T
+            WHERE ID > 0;
+            SELECT TOP (1)
+                   @ID = ID,
+                   @SQLCMD = txtCMD,
+                   @ExtraInfo = ExtraInfo
+            FROM @T;
+            RAISERROR(@SQLCMD, 0, 0) WITH NOWAIT;
+            IF @LogToTable = 1
+                INSERT INTO AzureSQLMaintenanceLog
+                VALUES
+                (@OperationTime, @SQLCMD, @ExtraInfo, SYSDATETIME(), NULL, 'Started');
+            BEGIN TRY
+                IF @debug != 'whatif'
+                    EXEC (@SQLCMD);
+                IF @LogToTable = 1
+                    UPDATE AzureSQLMaintenanceLog
+                    SET EndTime = SYSDATETIME(),
+                        StatusMessage = IIF(@debug = 'whatif', 'not executed - whatif mode', 'Succeeded')
+                    WHERE id = SCOPE_IDENTITY();
+            END TRY
+            BEGIN CATCH
+                SET @ScriptHasAnError = 1;
+                SET @msg = N'FAILED : ' + CAST(ERROR_NUMBER() AS VARCHAR(50)) + ERROR_MESSAGE();
+                RAISERROR(@msg, 0, 0) WITH NOWAIT;
+                IF @LogToTable = 1
+                    UPDATE AzureSQLMaintenanceLog
+                    SET EndTime = SYSDATETIME(),
+                        StatusMessage = @msg
+                    WHERE id = SCOPE_IDENTITY();
+            END CATCH;
+            DELETE FROM AzureSQLMaintenanceCMDQueue
+            WHERE ID = @ID;
+            DELETE FROM @T;
+        END;
+        DROP TABLE AzureSQLMaintenanceCMDQueue;
+    END;
 
-	if @ScriptHasAnError=0 	raiserror('Done',0,0)
-	if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,null,null,sysdatetime(),sysdatetime(),'End of operation')
-	if @ScriptHasAnError=1 	raiserror('Script has errors - please review the log.',16,1)
-end
+    ---------------------------------------------
+    --- Clean old records from log table
+    ---------------------------------------------
+    IF @LogToTable = 1
+    BEGIN
+        DELETE FROM dbo.AzureSQLMaintenanceLog
+        FROM dbo.AzureSQLMaintenanceLog L
+            JOIN
+            (
+                SELECT DISTINCT
+                       OperationTime
+                FROM dbo.AzureSQLMaintenanceLog
+                ORDER BY OperationTime DESC OFFSET @KeepXOperationInLog ROWS
+            ) F
+                ON L.OperationTime = F.OperationTime;
+        INSERT INTO dbo.AzureSQLMaintenanceLog
+        VALUES
+        (@OperationTime, NULL,
+         CAST(@@rowcount AS VARCHAR(100))
+         + ' rows purged from log table because number of operations to keep is set to: '
+         + CAST(@KeepXOperationInLog AS VARCHAR(100)), SYSDATETIME(), SYSDATETIME(), 'Cleanup Log Table');
+    END;
+
+    IF @ScriptHasAnError = 0
+        RAISERROR('Done', 0, 0);
+    IF @LogToTable = 1
+        INSERT INTO dbo.AzureSQLMaintenanceLog
+        VALUES
+        (@OperationTime, NULL, NULL, SYSDATETIME(), SYSDATETIME(), 'End of operation');
+    IF @ScriptHasAnError = 1
+        RAISERROR('Script has errors - please review the log.', 16, 1);
+END;
 GO
-print 'Execute AzureSQLMaintenance to get help' 
+PRINT 'Execute AzureSQLMaintenance to get help';
 
 
 /*
