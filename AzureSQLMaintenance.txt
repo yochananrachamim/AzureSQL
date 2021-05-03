@@ -3,14 +3,17 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2021-05-02
+	Current Version Date: 2021-05-03
 ***********************************************
 
 Change Log: 
-	2020-05-02 	- Added support for "per partition" rebuild / reorg
-			- added filter for only User tables and views for index maintenance 
+	
+	2021-05-03	+ add support for per schema maintenance
+		
+	2021-05-02	+ Added support for "per partition" rebuild / reorg
+				+ added filter for  User tables and views for index maintenance 
 	2020-01-07
-			+ some bug fixes - see GitHub for more information 
+				+ some bug fixes - see GitHub for more information 
 */
 
 if object_id('AzureSQLMaintenance') is null
@@ -23,6 +26,7 @@ ALTER Procedure [dbo].[AzureSQLMaintenance]
 		@ResumableIndexRebuild bit = 0,
 		@RebuildHeaps bit = 0,
 		@LogToTable bit = 0,
+		@WorkOnSchema sysname = null,
 		@debug nvarchar(20) = 'none' /* Optional values: 'none', 'whatif'*/
 	)
 as
@@ -95,6 +99,15 @@ begin
 	begin
 		
 		---------------------------------------------
+		--- Validate Schema name if provided
+		---------------------------------------------
+		if @WorkOnSchema is not null and not exists(select * from sys.schemas where [name] = @WorkOnSchema)
+		begin
+			raiserror('Provided schema name does not exists - please make sure the correct schema name is provided',16,1)
+			return 1;
+		end
+
+		---------------------------------------------
 		--- Prepare log table
 		---------------------------------------------
 
@@ -161,6 +174,11 @@ begin
 			set @msg = 'set Debug = ' + cast(@debug as varchar(20));
 			raiserror(@msg,0,0)
 		end
+		if @WorkOnSchema is not null
+		begin
+			set @msg = 'set Shcema = ' + cast(@WorkOnSchema as sysname);
+			raiserror(@msg,0,0)
+		end
 		raiserror('-----------------------',0,0)
 	end
 
@@ -202,10 +220,10 @@ begin
 	
 		raiserror('Get index information...(wait)',0,0) with nowait;
 		/* Get Index Information */
-		select 
+				select 
 			idxs.[object_id]
-			,ObjectSchema = OBJECT_SCHEMA_NAME(idxs.object_id)
-			,ObjectName = object_name(idxs.object_id) 
+			,ObjectSchema = so.name
+			,ObjectName = sc.name 
 			,IndexName = idxs.name
 			,idxs.type
 			,idxs.type_desc
@@ -219,7 +237,7 @@ begin
 			,i.forwarded_record_count
 			,null as OnlineOpIsNotSupported
 			,null as ObjectDoesNotSupportResumableOperation
-			,0 as IsPartitioned
+			,CASE WHEN ds.type='PS' THEN 1 ELSE 0 END as IsPartitioned
 			,0 as SkipIndex
 			,cast('' as nvarchar(100)) as IndexOperation
 			,cast('' as nvarchar(max)) as TSQLCommand
@@ -229,16 +247,15 @@ begin
 		from sys.indexes idxs
 		inner join sys.objects [SO]
                  on [SO].object_id = [idxs].object_id AND [SO].[type] IN ('U', 'V') 
+		inner join sys.schemas sc on sc.schema_id = SO.schema_id
+		inner join sys.data_spaces ds on idxs.data_space_id = ds.data_space_id
 		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
-		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
+		and sc.name !='sys' and (@WorkOnSchema is null or sc.name = @WorkOnSchema)
 		and idxs.is_disabled=0
 		order by i.avg_fragmentation_in_percent desc, i.page_count desc
-
-		-- mark partitioned indexe
-		update #idxBefore set IsPartitioned=1 where [object_id] in (select [object_id] from #idxBefore where partition_number>1)
-				
+		
 		-- mark indexes XML,spatial and columnstore not to run online update 
 		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where [type]=3 /*XML Indexes*/)
 
@@ -296,16 +313,16 @@ begin
 		where @mode='dummy' and type !=0
 
 		/* choose index operation Rebuild or Reorginize*/
-		update #idxBefore set IndexOperation='REORGANIZE',
+		update #idxBefore set IndexOperation='REORGANIZE ',
 		TSQLCommandExtraInfo = TSQLCommandExtraInfo + 'columnstore index detected - reorginize'
 		where @mode='dummy' and type in (5,6)/* Columnstore indexes in dummy mode -> reorganize them */
 
-		update #idxBefore set IndexOperation='REORGANIZE'
+		update #idxBefore set IndexOperation='REORGANIZE '
 		where avg_fragmentation_in_percent between 5 and 30 and @mode = 'smart'/* index fragmentation condition */ 
 		and type!=0 /*avoid heaps*/
 
 		-- all else should go for rebuild
-		update #idxBefore set IndexOperation='REBUILD'
+		update #idxBefore set IndexOperation='REBUILD '
 		where type not in (0,5,6) /*Heaps and CS indexes*/
 
 		update #idxBefore set TSQLCommandExtraInfo = TSQLCommandExtraInfo + ' Current fragmentation: ' + format(avg_fragmentation_in_percent/100,'p')+ ' with ' + cast(page_count as nvarchar(20)) + ' pages'
@@ -390,7 +407,7 @@ begin
 		/* Tranfer commands to command queue table*/
 		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
 			select TSQLCommand, TSQLCommandExtraInfo from #idxBefore
-
+			where type!=0 /*avoid heaps*/ and SkipIndex=0
 
 		---------------------------------------------
 		--- Index - Heaps 
@@ -443,7 +460,8 @@ begin
 		into #statsBefore
 		from sys.stats s cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp 
 		left join sys.indexes i on sp.object_id = i.object_id and sp.stats_id = i.index_id
-		where OBJECT_SCHEMA_NAME(s.object_id) != 'sys' and /*Modified stats or Dummy mode*/(isnull(sp.modification_counter,0)>0 or @mode='dummy')
+		where OBJECT_SCHEMA_NAME(s.object_id) != 'sys' and (@WorkOnSchema is null or OBJECT_SCHEMA_NAME(s.object_id) = @WorkOnSchema)
+		and /*Modified stats or Dummy mode*/(isnull(sp.modification_counter,0)>0 or @mode='dummy')
 		order by sp.last_updated asc
 
 		/*Remove statistics if it is handled by index rebuild / reorginize 
@@ -525,7 +543,7 @@ begin
 			drop table if exists cmdQueue
 			if object_id('tempdb..#idxBefore') is not null select * into idxBefore from #idxBefore
 			if object_id('tempdb..#statsBefore') is not null select * into statsBefore from #statsBefore
-			if object_id('tempdb..AzureSQLMaintenanceCMDQueue') is not null select * into cmdQueue from AzureSQLMaintenanceCMDQueue
+			if object_id('AzureSQLMaintenanceCMDQueue') is not null select * into cmdQueue from AzureSQLMaintenanceCMDQueue
 		end
 
 		/*Save current execution parameters in case resume is needed */
