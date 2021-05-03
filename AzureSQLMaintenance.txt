@@ -222,8 +222,8 @@ begin
 		/* Get Index Information */
 				select 
 			idxs.[object_id]
-			,ObjectSchema = so.name
-			,ObjectName = sc.name 
+			,ObjectSchema = sc.name
+			,ObjectName =  so.name
 			,IndexName = idxs.name
 			,idxs.type
 			,idxs.type_desc
