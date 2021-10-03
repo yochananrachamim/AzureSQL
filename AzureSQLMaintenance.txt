@@ -42,6 +42,8 @@ begin
 	declare @ScriptHasAnError int = 0; 
 	declare @ResumableIndexRebuildSupported int;
 	declare @indexStatsMode sysname;
+	declare @LowFragmentationBoundry int = 5;
+	declare @HighFragmentationBoundry int = 30;
 
 	/* make sure parameters selected correctly */
 	set @operation = lower(@operation)
@@ -248,7 +250,7 @@ begin
 		where c.is_computed=1 or system_type_id=189 /*TimeStamp column*/
 		
 		-- set SkipIndex=1 if conditions for maintenance are not met
-		-- this is used to idntify is stats need to be updated or not. 
+		-- this is used to idntify if stats need to be updated or not. 
 		-- Check#1 - if table is too small
 		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as table is too small'
 		where (
@@ -261,7 +263,7 @@ begin
 		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as fragmentation % is low'
 		where (
 					/*Table is big enough - but fragmentation is less than 5%*/
-					(page_count>@minPageCountForIndex and avg_fragmentation_in_percent<5)
+					(page_count>@minPageCountForIndex and avg_fragmentation_in_percent<@LowFragmentationBoundry)
 				)
 				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
 		
@@ -287,7 +289,7 @@ begin
 		set @msg = 'Average Fragmentation: ' + @msg
 		raiserror(@msg,0,0) with nowait
 
-		select @msg = sum(iif(avg_fragmentation_in_percent>=5 and page_count>@minPageCountForIndex,1,0)) from #idxBefore 
+		select @msg = sum(iif(avg_fragmentation_in_percent>=@LowFragmentationBoundry and page_count>@minPageCountForIndex,1,0)) from #idxBefore 
 		set @msg = 'Fragmented Indexes: ' + @msg
 		raiserror(@msg,0,0) with nowait
 
@@ -323,7 +325,7 @@ begin
 		select 
 		txtCMD = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '+ @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' ' +
 		case when (
-					avg_fragmentation_in_percent between 5 and 30 and @mode = 'smart')/* index fragmentation condition */ 
+					avg_fragmentation_in_percent between @LowFragmentationBoundry and @HighFragmentationBoundry and @mode = 'smart')/* index fragmentation condition */ 
 					or 
 					(@mode='dummy' and type in (5,6)/* Columnstore indexes in dummy mode -> reorganize them */
 				) then
