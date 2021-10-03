@@ -473,7 +473,7 @@ begin
 		declare @ExtraInfo nvarchar(max);
 	
 		/*Print debug information in case debug is activated */
-		if @debug!='None'
+		if @debug!='none'
 		begin
 			drop table if exists idxBefore
 			drop table if exists statsBefore
