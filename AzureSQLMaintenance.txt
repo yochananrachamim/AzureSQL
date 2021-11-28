@@ -7,7 +7,7 @@
 ***********************************************
 
 Change Log: 
-	2020-01-07
+	2021-01-07
 			+ some bug fixes - see GitHub for more information 
 */
 
