@@ -3,10 +3,11 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2021-01-07
+	Current Version Date: 2021-12-08
 ***********************************************
 
 Change Log: 
+	2021-12-08 - Fix issue #19 on GitGub
 	2021-01-07
 			+ some bug fixes - see GitHub for more information 
 */
