@@ -197,6 +197,7 @@ begin
 	
 		raiserror('Get index information...(wait)',0,0) with nowait;
 		/* Get Index Information */
+		/* using inner join - this eliminates indexes that we cannot maintain such as indexes on functions */
 		select 
 			idxs.[object_id]
 			,ObjectSchema = OBJECT_SCHEMA_NAME(idxs.object_id)
@@ -218,7 +219,7 @@ begin
 			,replicate('',128) as SkipReason
 		into #idxBefore
 		from sys.indexes idxs
-		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
+		inner join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
