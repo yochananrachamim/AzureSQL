@@ -220,11 +220,13 @@ begin
 			,replicate('',128) as SkipReason
 		into #idxBefore
 		from sys.indexes idxs
-		inner join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
+        join sys.objects o ON o.object_id = idxs.object_id
+		left join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,'LIMITED') i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
 		and idxs.is_disabled=0
+        and o.type != 'TF' -- Ignore TVFs that declare an index on returned table
 		order by i.avg_fragmentation_in_percent desc, i.page_count desc
 				
 		-- mark indexes XML,spatial and columnstore not to run online update 
