@@ -7,6 +7,7 @@
 ***********************************************
 
 Change Log: 
+	2022-01-30 - As per comment from Tariq, removing dbo schema name from alter procedure command to make sure we consistently using the same schema
 	2021-12-08 - Fix issue #19 on GitGub
 	2021-01-07
 			+ some bug fixes - see GitHub for more information 
@@ -15,7 +16,7 @@ Change Log:
 if object_id('AzureSQLMaintenance') is null
 	exec('create procedure AzureSQLMaintenance as /*dummy procedure body*/ select 1;')	
 GO
-ALTER Procedure [dbo].[AzureSQLMaintenance]
+ALTER PROCEDURE [AzureSQLMaintenance]
 	(
 		@operation nvarchar(10) = null,
 		@mode nvarchar(10) = 'smart',
