@@ -7,13 +7,16 @@
 ***********************************************
 
 Change Log: 
-	2022-01-30 - As per comment from Tariq, removing dbo schema name from procedure creation and update to "create or alter" command 
+	2022-01-30 - As per comment from Tariq, removing dbo schema name from procedure and use user default.
 	2021-12-08 - Fix issue #19 on GitGub
 	2021-01-07
 			+ some bug fixes - see GitHub for more information 
 */
 
-CREATE OR ALTER PROCEDURE [AzureSQLMaintenance]
+if object_id('AzureSQLMaintenance') is null
+	exec('create procedure AzureSQLMaintenance as /*dummy procedure body*/ select 1;')	
+GO
+ALTER PROCEDURE [AzureSQLMaintenance]
 	(
 		@operation nvarchar(10) = null,
 		@mode nvarchar(10) = 'smart',
