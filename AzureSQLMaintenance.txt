@@ -23,7 +23,7 @@ ALTER PROCEDURE [AzureSQLMaintenance]
 		@ResumableIndexRebuild bit = 0,
 		@RebuildHeaps bit = 0,
 		@LogToTable bit = 0,
-		@debug nvarchar = 'none'
+		@debug nvarchar(10) = 'none'
 	)
 as
 begin
