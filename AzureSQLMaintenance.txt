@@ -7,6 +7,7 @@
 ***********************************************
 
 Change Log: 
+	2022-04-25 - Set data type for @debug to nvarchar(10) as per comment I got from Paul McMillan - note that @debug is not in use at the moment.
 	2022-01-30 - As per comment from Tariq, removing dbo schema name from procedure and use user default.
 	2021-12-08 - Fix issue #19 on GitGub
 	2021-01-07
