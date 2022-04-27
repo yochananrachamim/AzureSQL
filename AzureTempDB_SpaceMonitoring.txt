@@ -73,7 +73,7 @@ where counter_name in('Log File(s) Size (KB)','Log File(s) Used Size (KB)')
 and instance_name='tempdb'
 
 --(8) Drill down to get information about log consumers
-with CTE as
+;with CTE as
 (select 
 	DBT.database_id,
 	SS.session_id,
