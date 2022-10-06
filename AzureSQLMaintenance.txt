@@ -3,10 +3,11 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2022-10-03
+	Current Version Date: 2022-10-06
 ***********************************************
 
 Change Log: 
+	2022-10-06 - Fix help text that was mixed up, thanks Holger for pointing that out.
 	2022-10-03 - Add [whatif] as the first debug option, fix - do not skip stats for reorganize.
 	2022-04-25 - Set data type for @debug to nvarchar(10) as per comment I got from Paul McMillan - note that @debug is not in use at the moment.
 	2022-01-30 - As per comment from Tariq, removing dbo schema name from procedure and use user default.
@@ -75,21 +76,21 @@ begin
 		raiserror('     "dummy" going through all indexes and statistics regardless thier modifications or fragmentation.',0,0)
 		raiserror(' ',0,0)
 		raiserror('@ResumableIndexRebuild(bit) [optional]',0,0)
-		raiserror(' optionaly you can choose to rebuild indexes as resumable operation: ',0,0)
+		raiserror(' Optionaly you can choose to rebuild indexes as resumable operation: ',0,0)
 		raiserror('     "0" (Default) using non resumable index rebuild.',0,0)
 		raiserror('     "1" using resumable index rebuild when it is supported.',0,0)
 		raiserror(' ',0,0)
 		raiserror('@RebuildHeaps(bit) [optional]',0,0)
-		raiserror(' Logging option: @LogToTable(bit)',0,0)
+		raiserror(' Rebuild HEAPS to fix forwarded records issue on tables with no clustered index',0,0)
+		raiserror('     0 - (Default) do not rebuild heaps',0,0)
+		raiserror('     1 - Rebuild heaps based on @mode parameter, @mode=dummy will rebuild all heaps',0,0)
+		raiserror(' ',0,0)
+		raiserror('@LogToTable(bit) [optional]',0,0)
+		raiserror(' Optionaly allows you to turn on logging ',0,0)
 		raiserror('     0 - (Default) do not log operation to table',0,0)
 		raiserror('     1 - log operation to table',0,0)
 		raiserror('		for logging option only 3 last execution will be kept by default. this can be changed by easily in the procedure body.',0,0)
 		raiserror('		Log table will be created automatically if not exists.',0,0)
-		raiserror(' ',0,0)
-		raiserror('@LogToTable(bit) [optional]',0,0)
-		raiserror(' Rebuild HEAPS to fix forwarded records issue on tables with no clustered index',0,0)
-		raiserror('     0 - (Default) do not rebuild heaps',0,0)
-		raiserror('     1 - Rebuild heaps based on @mode parameter, @mode=dummy will rebuild all heaps',0,0)
 		raiserror(' ',0,0)
 		raiserror('@debug [optional]',0,0)
 		raiserror(' Allows debugging feature.',0,0)
