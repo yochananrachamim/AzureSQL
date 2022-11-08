@@ -3,10 +3,11 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2022-10-06
+	Current Version Date: 2022-11-08
 ***********************************************
 
 Change Log: 
+	2022-11-08 - Ignore table value functions for index maintenance Thanks to https://github.com/Mitch-Wheat for suggesting that
 	2022-10-06 - Fix help text that was mixed up, thanks Holger for pointing that out.
 	2022-10-03 - Add [whatif] as the first debug option, fix - do not skip stats for reorganize.
 	2022-04-25 - Set data type for @debug to nvarchar(10) as per comment I got from Paul McMillan - note that @debug is not in use at the moment.
@@ -231,12 +232,14 @@ begin
 			,replicate(' ',20)  as OperationToTake 
 			,replicate(' ',128) as SkipReason
 		into #idxBefore
-		from sys.indexes idxs
+		from sys.indexes idxs 
+		inner join sys.objects obj on idxs.object_id = obj.object_id
 		inner join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
 		and idxs.is_disabled=0
+		and obj.type_desc != 'TF' /* Ignore table value functions */
 		order by i.avg_fragmentation_in_percent desc, i.page_count desc
 				
 		-- mark indexes XML,spatial and columnstore not to run online update 
