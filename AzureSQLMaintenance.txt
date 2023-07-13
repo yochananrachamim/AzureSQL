@@ -3,10 +3,11 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2022-11-08
+	Current Version Date: 2023-07-13
 ***********************************************
 
 Change Log: 
+	2023-07-13 - KB4551220 - skip resumable operation for indexes that has filter
 	2022-11-08 - Ignore table value functions for index maintenance Thanks to https://github.com/Mitch-Wheat for suggesting that
 	2022-10-06 - Fix help text that was mixed up, thanks Holger for pointing that out.
 	2022-10-03 - Add [whatif] as the first debug option, fix - do not skip stats for reorganize.
@@ -218,6 +219,7 @@ begin
 			,IndexName = idxs.name
 			,idxs.type
 			,idxs.type_desc
+			,idxs.has_filter
 			,i.avg_fragmentation_in_percent
 			,i.page_count
 			,i.index_id
@@ -267,6 +269,11 @@ begin
 		from #idxBefore idx join sys.index_columns ic on idx.object_id = ic.object_id and idx.index_id=ic.index_id
 		join sys.columns c on ic.object_id=c.object_id and ic.column_id=c.column_id
 		where c.is_computed=1 or system_type_id=189 /*TimeStamp column*/
+
+		-- Disable resumable operation for indexes that has filter (filtered indexes) (KB4551220)
+		update idx set ObjectDoesNotSupportResumableOperation=1
+		from #idxBefore idx 
+		where idx.has_filter=1
 		
 		-- set SkipIndex=1 if conditions for maintenance are not met
 		-- this is used to idntify if stats need to be updated or not. 
