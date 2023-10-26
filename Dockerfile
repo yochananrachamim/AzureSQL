@@ -24,4 +24,4 @@ COPY . /app
 #RUN pip install -r requirements.txt
 
 # Define the default command to run your Python script with sqlcmd
-CMD ["python", "sql_maintenance.py"]
+CMD ["python", "maintenance.py"]
