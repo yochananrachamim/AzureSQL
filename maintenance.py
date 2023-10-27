@@ -16,7 +16,7 @@ def procedure_execution_on_db(query_name):
             query_name, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if procedure_execution.returncode == 0:
-            print("Procedure has been created successfully")
+            print("Procedure has been executed successfully")
         else:
             print("Error Occured:")
             print(procedure_execution.stderr)
@@ -28,8 +28,7 @@ def procedure_execution_on_db(query_name):
 def main():
 
     # Creating procedure in DB
-    procedure_creation_from_file = os.path.abspath(
-        "/app/AzureSQLMaintenance.txt")
+    procedure_creation_from_file = os.path.abspath("/app/AzureSQLMaintenance.txt")
     creating_procedure_command = [
         "/opt/mssql-tools/bin/sqlcmd",
         "-S", server,
