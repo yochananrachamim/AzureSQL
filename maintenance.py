@@ -8,8 +8,6 @@ username = os.environ['DB_USERNAME']
 password = os.environ['DB_PASSWORD']
 
 # creatating procedure in DB
-
-
 def procedure_execution_on_db(query_name):
     try:
         procedure_execution = subprocess.run(
@@ -24,9 +22,7 @@ def procedure_execution_on_db(query_name):
         print("Error running sqlcmd command:")
         print(e.stderr)
 
-
 def main():
-
     # Creating procedure in DB
     procedure_creation_from_file = os.path.abspath("/app/AzureSQLMaintenance.txt")
     creating_procedure_command = [
@@ -55,8 +51,7 @@ def main():
         "-l", "60"
     ]
 
-    print(
-        f"Triggering maintenance procedure for indexes on Server  {server} and db {database}")
+    print(f"Triggering maintenance procedure for indexes on Server  {server} and db {database}")
     procedure_execution_on_db(triggering_procedure_index_command)
 
     # Triggering maintenance procedure for statistics...
@@ -72,10 +67,8 @@ def main():
         "-l", "60"
     ]
 
-    print(
-        f"Triggering maintenance procedure for statistics on Server  {server} and db {database}")
+    print(f"Triggering maintenance procedure for statistics on Server  {server} and db {database}")
     procedure_execution_on_db(triggering_procedure_statistics_command)
-
 
 if __name__ == "__main__":
 
