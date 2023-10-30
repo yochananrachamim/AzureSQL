@@ -4,8 +4,8 @@ import subprocess
 # Define your SQL Server connection details
 server = os.environ['MAINTENANCE_DB_CONNECTION_URL']
 database = os.environ['MAINTENANCE_DB_NAME']
-username = os.environ['DB_USERNAME']
-password = os.environ['DB_PASSWORD']
+username = os.environ['GAS_DB_USERNAME']
+password = os.environ['GAS_DB_PASSWORD']
 
 # creatating procedure in DB
 def procedure_execution_on_db(query_name):
