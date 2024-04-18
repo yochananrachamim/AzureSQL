@@ -3,10 +3,11 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2023-07-13
+	Current Version Date: 2024-04-18
 ***********************************************
 
 Change Log: 
+	2024-04-18 - Add internal variable to control SORT_IN_TEMPDB, change the way alter index command is being build to make it more flexible.
 	2023-07-13 - KB4551220 - skip resumable operation for indexes that has filter
 	2022-11-08 - Ignore table value functions for index maintenance Thanks to https://github.com/Mitch-Wheat for suggesting that
 	2022-10-06 - Fix help text that was mixed up, thanks Holger for pointing that out.
@@ -51,6 +52,7 @@ begin
 	declare @indexStatsMode sysname;
 	declare @LowFragmentationBoundry int = 5;
 	declare @HighFragmentationBoundry int = 30;
+	declare @SORT_IN_TEMPDB bit = 1; /* 1=Activate SORT_IN_TEMPDB , 0= do not activate SORT_IN_TEMPDB  while rebuilding indexes */
 
 	/* make sure parameters selected correctly */
 	set @operation = lower(@operation)
@@ -230,6 +232,7 @@ begin
 			,i.forwarded_record_count
 			,null as OnlineOpIsNotSupported
 			,null as ObjectDoesNotSupportResumableOperation
+			,cast(0 as bit) as SortInTempDB
 			,case when ps.data_space_id IS NULL then 0 else 1 end as IsPartitioned
 			,0 as SkipIndex
 			,replicate(' ',20)  as OperationToTake 
@@ -316,6 +319,16 @@ begin
 				'REBUILD'
 			end
 
+		-- Choose when to do SORT_IN_TEMPDB, based on variable and if resumable operation is used as SORT_IN_TEMPDB is not supported for resumable operations.
+		update idx set SortInTempDB=1
+		from #idxBefore idx 
+		where 
+			(
+				/* Internal variable instrusts to use SORT_IN_TEMPDB and resumable operation was not activated*/
+				/* Resumable operation cannot use sort in tempDB as tempdb is nor persisted*/
+				@SORT_IN_TEMPDB=1 and @ResumableIndexRebuild = 0 
+			)
+		
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Index Information:',0,0) with nowait
 		raiserror('---------------------------------------',0,0) with nowait
@@ -365,16 +378,14 @@ begin
 		txtCMD = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '+ @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' ' +
 		OperationToTake+ ' ' + 
 		case when IsPartitioned = 1 then 'PARTITION=' + CAST(partition_number AS varchar(10)) + ' ' else '' end +
-		case 
-			when OperationToTake = 'REBUILD' and OnlineOpIsNotSupported=1 then
-			'WITH(ONLINE=OFF,MAXDOP=1)'
-			when OperationToTake = 'REBUILD' and (ObjectDoesNotSupportResumableOperation=1 or @ResumableIndexRebuildSupported=0 or @ResumableIndexRebuild=0) then
-			'WITH(ONLINE=ON,MAXDOP=1)'
-			when OperationToTake = 'REBUILD' then
-			'WITH(ONLINE=ON,MAXDOP=1, RESUMABLE=ON)'
-			else 
-			''
-		end + ';'
+		case when OperationToTake='REBUILD' 
+			then 'WITH(MAXDOP=1'  + 
+			case when OnlineOpIsNotSupported=1 then ',ONLINE=OFF' else ',ONLINE=ON' end +
+			case when @ResumableIndexRebuild=1 and @ResumableIndexRebuildSupported=1 and ObjectDoesNotSupportResumableOperation=0 then ',RESUMABLE=ON' else ',RESUMABLE=OFF' end + 
+			case when SortInTempDB=1 then ',SORT_IN_TEMPDB=ON' else ',SORT_IN_TEMPDB=OFF' end +
+			')' 
+			else /* Operation is reoranize*/ '' end + 
+		';'
 		, ExtraInfo =
 			'Taking Action: ' + OperationToTake + ' ' + 
 			case when type in (5,6) then
