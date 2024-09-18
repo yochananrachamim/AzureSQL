@@ -3,11 +3,11 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2024-09-12
+	Current Version Date: 2024-09-18
 ***********************************************
 
 Change Log: 
-	2024-09-12 - Preserve xml compression in case this was used for the index. 
+	2024-09-18 - Preserve xml compression in case this was used for the index.
 	2024-04-18 - Add internal variable to control SORT_IN_TEMPDB, change the way alter index command is being build to make it more flexible.
 	2023-07-13 - KB4551220 - skip resumable operation for indexes that has filter
 	2022-11-08 - Ignore table value functions for index maintenance Thanks to https://github.com/Mitch-Wheat for suggesting that
@@ -244,7 +244,7 @@ begin
 		left join sys.partition_schemes ps ON idxs.data_space_id = ps.data_space_id
 		inner join sys.objects obj on idxs.object_id = obj.object_id
 		left join sys.partitions p on p.object_id = obj.object_id and p.index_id = idxs.index_id
-		inner join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
+		inner join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id and p.partition_number=i.partition_number
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
