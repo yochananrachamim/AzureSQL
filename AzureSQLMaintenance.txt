@@ -3,10 +3,11 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2024-09-18
+	Current Version Date: 2024-09-23
 ***********************************************
 
 Change Log: 
+	2024-09-23 - Avoid rebuil heaps on external tables as this is not needed and not possible.
 	2024-09-18 - Preserve xml compression in case this was used for the index.
 	2024-04-18 - Add internal variable to control SORT_IN_TEMPDB, change the way alter index command is being build to make it more flexible.
 	2023-07-13 - KB4551220 - skip resumable operation for indexes that has filter
@@ -236,6 +237,7 @@ begin
 			,null as ObjectDoesNotSupportResumableOperation
 			,cast(0 as bit) as SortInTempDB
 			,case when ps.data_space_id IS NULL then 0 else 1 end as IsPartitioned
+			,case when et.object_id is NULL then 0 else 1 end as IsExternalTable
 			,0 as SkipIndex
 			,replicate(' ',20)  as OperationToTake 
 			,replicate(' ',128) as SkipReason
@@ -244,6 +246,7 @@ begin
 		left join sys.partition_schemes ps ON idxs.data_space_id = ps.data_space_id
 		inner join sys.objects obj on idxs.object_id = obj.object_id
 		left join sys.partitions p on p.object_id = obj.object_id and p.index_id = idxs.index_id
+		left join sys.external_tables et on obj.object_id = et.object_id
 		inner join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id and p.partition_number=i.partition_number
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
@@ -413,9 +416,10 @@ begin
 			txtCMD = 'ALTER TABLE ' + @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' REBUILD ' + 
 			case when IsPartitioned = 1 then 'PARTITION=' + CAST(partition_number AS varchar(10)) + ' ' else '' end + ';' 
 			, ExtraInfo = 'Rebuilding heap - forwarded records ' + cast(forwarded_record_count as varchar(100)) + ' out of ' + cast(record_count as varchar(100)) + ' record in the table'
-			from #idxBefore
+			from #idxBefore 
 			where
 				type = 0 /*heaps*/
+				and IsExternalTable=0 /*cannot rebuild external tables*/
 				and 
 					(
 						@mode='dummy' 
