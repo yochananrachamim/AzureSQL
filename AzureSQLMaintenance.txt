@@ -387,7 +387,7 @@ begin
 		case when OperationToTake='REBUILD' 
 			then 'WITH(MAXDOP=1'  + 
 			case when OnlineOpIsNotSupported=1 then ',ONLINE=OFF' else ',ONLINE=ON' end +
-			case when @ResumableIndexRebuild=1 and @ResumableIndexRebuildSupported=1 and ObjectDoesNotSupportResumableOperation=0 then ',RESUMABLE=ON' else ',RESUMABLE=OFF' end + 
+			case when @ResumableIndexRebuild=1 and @ResumableIndexRebuildSupported=1 and ObjectDoesNotSupportResumableOperation=0 then ',RESUMABLE=ON' else '' end + 
 			case when SortInTempDB=1 then ',SORT_IN_TEMPDB=ON' else ',SORT_IN_TEMPDB=OFF' end +
 			case when xml_compression=1 then ',XML_COMPRESSION=ON' else '' end + 
 			')' 
