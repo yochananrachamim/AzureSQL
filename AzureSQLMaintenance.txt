@@ -3,10 +3,11 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2024-09-23
+	Current Version Date: 2025-11-04
 ***********************************************
 
 Change Log: 
+	2025-11-04 - Add User Override options. (exclue or override the command or add extra command to maintenance operation) 
 	2024-09-23 - Avoid rebuil heaps on external tables as this is not needed and not possible.
 	2024-09-18 - Preserve xml compression in case this was used for the index.
 	2024-04-18 - Add internal variable to control SORT_IN_TEMPDB, change the way alter index command is being build to make it more flexible.
@@ -55,6 +56,10 @@ begin
 	declare @LowFragmentationBoundry int = 5;
 	declare @HighFragmentationBoundry int = 30;
 	declare @SORT_IN_TEMPDB bit = 1; /* 1=Activate SORT_IN_TEMPDB , 0= do not activate SORT_IN_TEMPDB  while rebuilding indexes */
+	
+	/*
+	Add your manual settings here
+	*/
 
 	/* make sure parameters selected correctly */
 	set @operation = lower(@operation)
@@ -104,6 +109,13 @@ begin
 		raiserror('     whatif - Remark all commands so it will not be executed, helps with understanding the commands to be executed',0,0)
 		raiserror('     * in any case debug is used there will be user tables created to help with reviewing the process. cmdQueue, idxBefore and statsBefore ',0,0)
 		raiserror(' ',0,0)
+		raiserror('User Override settings:',0,0)
+		raiserror('     You are allowed to averride the default behavior as follows ',0,0)
+		raiserror('       - add command to be executed in addition to the maintenance script',0,0)
+		raiserror('       - Exclude either whole schema, table, index or statistics from an operation',0,0)
+		raiserror('       - force command of your own, such as sample percent for stats update or specific index',0,0)
+		raiserror('     for more information about it open the code and go to line 145 to get some samples and available options.',0,0)
+		raiserror(' ',0,0)
 		raiserror('Example:',0,0)
 		raiserror('		exec  AzureSQLMaintenance ''all'', @LogToTable=1',0,0)
 	end
@@ -118,6 +130,64 @@ begin
 		if object_id('AzureSQLMaintenanceLog') is null and @LogToTable=1
 		begin
 			create table AzureSQLMaintenanceLog (id bigint primary key identity(1,1), OperationTime datetime2, command varchar(4000),ExtraInfo varchar(4000), StartTime datetime2, EndTime datetime2, StatusMessage varchar(1000));
+		end
+
+		/* Prepare User override table if not exists */
+		if object_id('AzureSQLMaintenanceOverride') is null
+		begin
+				create table AzureSQLMaintenanceOverride(
+					PK int identity primary key,
+					ApplyOnObjectType nvarchar(10) null, /* schema / table / index / statistics */
+					TableSchema sysname null,
+					TableName sysname null, 
+					IndexName sysname null, 
+					StatisticsName sysname null,
+					Operation nvarchar(10) null, /* index / statistics / Null */
+					OverrideName varchar(100) not null, /* Exclude / Manual / AddCommand */
+					AdditionalSettings varchar(max) null,
+					IsSample bit not null,
+					Remark varchar(1000) null
+					,constraint Add_Command_Cannot_Be_Applied_On_Object check( (lower(OverrideName) =lower('AddCommand') and ApplyOnObjectType is null ) or (ApplyOnObjectType is not null and lower(OverrideName) !=lower('AddCommand')) )
+					,constraint Cannot_Apply_Index_Operation_On_Statistics check(lower(Operation)!=lower('Index') OR (lower(Operation)=lower('Index') and StatisticsName is null ))
+					,constraint Cannot_Apply_Statistics_Operation_On_Index check(lower(Operation)!=lower('Statistics') OR (lower(Operation)=lower('Statistics') and IndexName is null ))
+					,constraint At_Schema_Level_Can_Only_Exclue check(lower(ApplyOnObjectType) != lower('Schema') or (lower(ApplyOnObjectType)=lower('Schema') and lower(OverrideName) =lower('Exclude')))
+					)
+
+				/*
+				Some sample configuration for user override. 
+
+				* note, a mistake in applying the override most likely to just be ignored, please make sure you test the settings to confirm it has been applied correctly. 
+				  below there are some samples you can use. 
+
+				insert into AzureSQLMaintenanceOverride
+					select NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- ReadMe',1,'Please read the below samples to understand better the options you can override '
+					union all select null,NULL,NULL,NULL,NULL,NULL,'AddCommand','SELECT 1',1,NULL
+					union all select 'Schema','dbo',NULL,NULL,NULL,'Index','exclude',NULL,1,NULL
+					union all select 'Schema','dbo',NULL,NULL,NULL,'Statistics','exclude',NULL,1,NULL
+					union all select 'Table','dbo','tab1',NULL,NULL,'Index','exclude',NULL,1,NULL
+					union all select 'Table','dbo','tab1',NULL,NULL,'Statistics','exclude',NULL,1,NULL
+					union all select 'Table','dbo','tab1','idx1',NULL,'Statistics','exclude',NULL,1, NULL
+					union all select 'Table','dbo','tab1',NULL,'stats1','Statistics','exclude',NULL,1,NULL
+					union all select 'Index','dbo','tab1','idx1',NULL,'Index','exclude',NULL,1,NULL
+					union all select 'Statistics','dbo','tab1',NULL,'stats1','Statistics','exclude',NULL,1,NULL
+					union all select 'Table','dbo','tab2',NULL,NULL,'Index','Manual',NULL,1,NULL
+					union all select 'Table','dbo','tab2',NULL,NULL,'Statistics','Manual',NULL,1,NULL
+					union all select 'Table','dbo','tab2','idx2',NULL,'Statistics','Manual',NULL,1, NULL
+					union all select 'Table','dbo','tab2',NULL,'stats2','Statistics','Manual',NULL,1,NULL
+					union all select 'Index','dbo','tab2','idx2',NULL,'Index','Manual',NULL,1,'Use commant template with place holders in curly braces such as: ALTER INDEX [{IndexName}] ON [{SchemaName}].[{TableName}] rebuild; '
+					union all select 'Statistics','dbo','tab2',NULL,'stats2','Statistics','Manual',NULL,1,NULL
+
+
+					insert into AzureSQLMaintenanceOverride values('Table','SalesLT','Customer',null,null,'Statistics','Manual','UPDATE STATISTICS [{SchemaName}].[{TableName}] ([{StatisticsName}]) WITH FULLSCAN; --manual row2',0,null)
+					insert into AzureSQLMaintenanceOverride values('Statistics','dbo','tab1',null,'idx1','Statistics','Manual','UPDATE STATISTICS [{SchemaName}].[{TableName}] ([{StatisticsName}]) WITH FULLSCAN; -- manual row 1',0,null)
+
+					insert into AzureSQLMaintenanceOverride values('Table','SalesLT','Customer',null,null,'Index','Manual','Alter index [{IndexName}] on [{SchemaName}].[{TableName}] rebuild;',0,null)
+					insert into AzureSQLMaintenanceOverride values('Index','dbo','tab1','idx1',null,'Index','Manual','Alter index [{IndexName}] on [{SchemaName}].[{TableName}] rebuild;',0,null)
+
+
+					insert into AzureSQLMaintenanceOverride values(NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- Adding command 1 out of 2 to execution ',0,null)
+					insert into AzureSQLMaintenanceOverride values(NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- Adding command 2 out of 2 to execution ',0,null)
+				*/
 		end
 
 		---------------------------------------------
@@ -241,6 +311,8 @@ begin
 			,0 as SkipIndex
 			,replicate(' ',20)  as OperationToTake 
 			,replicate(' ',128) as SkipReason
+			,0 as UserOverride
+			,replicate(' ',1024) as UserOverrideTemplate
 		into #idxBefore
 		from sys.indexes idxs 
 		left join sys.partition_schemes ps ON idxs.data_space_id = ps.data_space_id
@@ -334,7 +406,49 @@ begin
 				/* Resumable operation cannot use sort in tempDB as tempdb is nor persisted*/
 				@SORT_IN_TEMPDB=1 and @ResumableIndexRebuild = 0 
 			)
+
+		-- Apply User override settings for indexes at schema level. ***test***
+		update idx set SkipIndex=1, SkipReason='User override at schema level'
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='Schema' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Exclude'
+					and ovr.TableSchema = idx.ObjectSchema
+
+		-- Apply User override settings for indexes at table level. ***test***
+		update idx set SkipIndex=1, SkipReason='User override at table level'
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='Table' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Exclude'
+					and ovr.TableSchema = idx.ObjectSchema
+					and ovr.TableName = idx.ObjectName
 		
+		-- Apply User override settings for indexes at index level. ***test***
+		update idx set SkipIndex=1, SkipReason='User override at index level'
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='Index' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Exclude'
+					and ovr.TableSchema = idx.ObjectSchema
+					and ovr.TableName = idx.ObjectName
+					and ovr.IndexName = idx.IndexName
+		
+		-- Tag rows that has manual overrride so we can handle it differently later - This is for table level. ***test***
+		update idx set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+			on ovr.ApplyOnObjectType='table' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Manual'
+					and ovr.TableSchema = idx.ObjectSchema
+					and ovr.TableName = idx.ObjectName
+		
+		-- Tag rows that has manual overrride so we can handle it differently later - This is for index level. ***test***
+		update idx set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+			on ovr.ApplyOnObjectType='Index' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Manual'
+					and ovr.TableSchema = idx.ObjectSchema
+					and ovr.TableName = idx.ObjectName
+					and ovr.IndexName = idx.IndexName
+
+
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Index Information:',0,0) with nowait
 		raiserror('---------------------------------------',0,0) with nowait
@@ -377,7 +491,15 @@ begin
 			set @idxIdentifierEnd = ']'
 		end
 
-			
+		/*Handle User Override for indexes*/
+		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
+		select 
+		txtCMD = REPLACE(REPLACE(REPLACE('/*User Override*/'+UserOverrideTemplate,'{TableName}',idx.ObjectName),'{SchemaName}',idx.ObjectSchema),'{IndexName}',idx.IndexName)
+		,ExtraInfo = 'User Override command'
+		from #idxBefore idx
+		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/ and UserOverride=1 /*User Override requested*/
+		
+
 		/* create queue for indexes */
 		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
 		select 
@@ -400,9 +522,8 @@ begin
 			else 
 				'Current fragmentation: ' + format(avg_fragmentation_in_percent/100,'p')+ ' with ' + cast(page_count as nvarchar(20)) + ' pages'
 			end
-		from #idxBefore
-		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/
-
+		from #idxBefore 	
+		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/ and UserOverride=0 /*No User Override*/
 
 		---------------------------------------------
 		--- Index - Heaps 
@@ -453,7 +574,10 @@ begin
 			,sp.modification_counter
 			, i.type
 			, i.type_desc
-			,0 as SkipStatistics
+			,0 as SkipStatistics /* 0=do not skip, 1=skip unless user override, 2=skip anyway*/
+			,replicate(' ',128) as SkipReason
+			,0 as UserOverride
+			,replicate(' ',1024) as UserOverrideTemplate
 		into #statsBefore
 		from sys.stats s cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp 
 		left join sys.indexes i on sp.object_id = i.object_id and sp.stats_id = i.index_id
@@ -473,15 +597,56 @@ begin
 			where _idx.SkipIndex=0 and _idx.OperationToTake='REBUILD'
 
 		/*Skip statistics for Columnstore indexes*/
-		update #statsBefore set SkipStatistics=1
+		update #statsBefore set SkipStatistics=2
 		where type in (5,6) /*Column store indexes*/
 
 		/*Skip statistics if resumable operation is pause on the same object*/
 		if @ResumableIndexRebuildSupported=1
 		begin
-			update _stats set SkipStatistics=1
+			update _stats set SkipStatistics=2
 			from #statsBefore _stats join sys.index_resumable_operations iro on _stats.object_id=iro.object_id and _stats.stats_id=iro.index_id
 		end
+
+		-- Apply User override settings for Statistics at schema level. ***test***
+		update _stats set SkipStatistics=2, SkipReason='User override at schema level'
+		from #statsBefore _stats 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='schema' and ovr.IsSample=0 and ovr.Operation = 'Statistics' and ovr.OverrideName='exclude'
+					and ovr.TableSchema = _stats.ObjectSchema
+				
+		-- Apply User override settings for Statistics at table level. ***test***
+		update _stats set SkipStatistics=2, SkipReason='User override at table level'
+		from #statsBefore _stats 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='table' and ovr.IsSample=0 and ovr.Operation = 'Statistics' and ovr.OverrideName='exclude'
+					and ovr.TableSchema = _stats.ObjectSchema
+					and ovr.TableName = _stats.ObjectName
+		
+		-- Apply User override settings for Statistics at index level. ***test***
+		update _stats set SkipStatistics=2, SkipReason='User override at Statistics level'
+		from #statsBefore _stats 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='statistics' and ovr.IsSample=0 and ovr.Operation = 'Statistics' and ovr.OverrideName='exclude'
+					and ovr.TableSchema = _stats.ObjectSchema
+					and ovr.TableName = _stats.ObjectName
+					and ovr.StatisticsName = _stats.StatsName
+		
+		-- Tag rows that has manual overrride so we can handle it differently later - This is for table level. ***test***
+		update _stats set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
+		from #statsBefore _stats 
+			join AzureSQLMaintenanceOverride ovr 
+			on ovr.ApplyOnObjectType='table' and ovr.IsSample=0 and ovr.Operation='Statistics' and ovr.OverrideName='Manual'
+					and ovr.TableSchema = _stats.ObjectSchema
+					and ovr.TableName = _stats.ObjectName
+		
+		-- Tag rows that has manual overrride so we can handle it differently later - This is for index level. ***test***
+		update _stats set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
+		from #statsBefore _stats 
+		join AzureSQLMaintenanceOverride ovr 
+			on ovr.ApplyOnObjectType='Statistics' and ovr.IsSample=0 and ovr.Operation='Statistics' and ovr.OverrideName='Manual'
+					and ovr.TableSchema = _stats.ObjectSchema
+					and ovr.TableName = _stats.ObjectName
+					and ovr.StatisticsName = _stats.StatsName
 		
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Statistics Information:',0,0) with nowait
@@ -515,6 +680,15 @@ begin
 			set @statsIdentifierEnd = ']'
 		end
 		
+		/*Handle User Override for Statistics objects*/
+		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
+		select 
+		txtCMD = REPLACE(REPLACE(REPLACE('/*User Override*/'+UserOverrideTemplate,'{TableName}',_stats.ObjectName),'{SchemaName}',_stats.ObjectSchema),'{StatisticsName}',_stats.StatsName)
+		,ExtraInfo = 'User Override statistics update command'
+		from #statsBefore _stats
+		where SkipStatistics in (0,1 /*exclude 2*/) and UserOverride=1 /*User Override requested*/
+
+
 		/* create queue for update stats */
 		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
 		select 
@@ -558,6 +732,14 @@ begin
 			insert into AzureSQLMaintenanceCMDQueue(ID,txtCMD,ExtraInfo) values(-1,'parameters to be used by resume code path',@ExtraInfo)
 			set identity_insert AzureSQLMaintenanceCMDQueue off
 		end
+
+		if @operation in('statistics','index','all')
+		begin
+			/*Add extra command from User override */
+			insert into AzureSQLMaintenanceCMDQueue 
+			select AdditionalSettings, 'User Added Command' from AzureSQLMaintenanceOverride where OverrideName='AddCommand' and IsSample=0
+		end
+
 	
 		---------------------------------------------
 		--- Executing commands
