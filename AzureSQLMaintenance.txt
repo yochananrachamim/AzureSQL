@@ -3,7 +3,7 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2025-11-04
+	Current Version Date: 2025-11-06
 ***********************************************
 
 Change Log: 
@@ -166,27 +166,25 @@ begin
 					union all select 'Schema','dbo',NULL,NULL,NULL,'Statistics','exclude',NULL,1,NULL
 					union all select 'Table','dbo','tab1',NULL,NULL,'Index','exclude',NULL,1,NULL
 					union all select 'Table','dbo','tab1',NULL,NULL,'Statistics','exclude',NULL,1,NULL
-					union all select 'Table','dbo','tab1','idx1',NULL,'Statistics','exclude',NULL,1, NULL
 					union all select 'Table','dbo','tab1',NULL,'stats1','Statistics','exclude',NULL,1,NULL
 					union all select 'Index','dbo','tab1','idx1',NULL,'Index','exclude',NULL,1,NULL
 					union all select 'Statistics','dbo','tab1',NULL,'stats1','Statistics','exclude',NULL,1,NULL
 					union all select 'Table','dbo','tab2',NULL,NULL,'Index','Manual',NULL,1,NULL
 					union all select 'Table','dbo','tab2',NULL,NULL,'Statistics','Manual',NULL,1,NULL
-					union all select 'Table','dbo','tab2','idx2',NULL,'Statistics','Manual',NULL,1, NULL
 					union all select 'Table','dbo','tab2',NULL,'stats2','Statistics','Manual',NULL,1,NULL
 					union all select 'Index','dbo','tab2','idx2',NULL,'Index','Manual',NULL,1,'Use commant template with place holders in curly braces such as: ALTER INDEX [{IndexName}] ON [{SchemaName}].[{TableName}] rebuild; '
 					union all select 'Statistics','dbo','tab2',NULL,'stats2','Statistics','Manual',NULL,1,NULL
 
 
-					insert into AzureSQLMaintenanceOverride values('Table','SalesLT','Customer',null,null,'Statistics','Manual','UPDATE STATISTICS [{SchemaName}].[{TableName}] ([{StatisticsName}]) WITH FULLSCAN; --manual row2',0,null)
-					insert into AzureSQLMaintenanceOverride values('Statistics','dbo','tab1',null,'idx1','Statistics','Manual','UPDATE STATISTICS [{SchemaName}].[{TableName}] ([{StatisticsName}]) WITH FULLSCAN; -- manual row 1',0,null)
+					insert into AzureSQLMaintenanceOverride values('Table','SalesLT','Customer',null,null,'Statistics','Manual','UPDATE STATISTICS [{SchemaName}].[{TableName}] ([{StatisticsName}]) WITH FULLSCAN; --manual row2',1,null)
+					insert into AzureSQLMaintenanceOverride values('Statistics','dbo','tab1',null,'idx1','Statistics','Manual','UPDATE STATISTICS [{SchemaName}].[{TableName}] ([{StatisticsName}]) WITH FULLSCAN; -- manual row 1',1,null)
 
-					insert into AzureSQLMaintenanceOverride values('Table','SalesLT','Customer',null,null,'Index','Manual','Alter index [{IndexName}] on [{SchemaName}].[{TableName}] rebuild;',0,null)
-					insert into AzureSQLMaintenanceOverride values('Index','dbo','tab1','idx1',null,'Index','Manual','Alter index [{IndexName}] on [{SchemaName}].[{TableName}] rebuild;',0,null)
+					insert into AzureSQLMaintenanceOverride values('Table','SalesLT','Customer',null,null,'Index','Manual','Alter index [{IndexName}] on [{SchemaName}].[{TableName}] rebuild;',1,null)
+					insert into AzureSQLMaintenanceOverride values('Index','dbo','tab1','idx1',null,'Index','Manual','Alter index [{IndexName}] on [{SchemaName}].[{TableName}] rebuild;',1,null)
 
 
-					insert into AzureSQLMaintenanceOverride values(NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- Adding command 1 out of 2 to execution ',0,null)
-					insert into AzureSQLMaintenanceOverride values(NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- Adding command 2 out of 2 to execution ',0,null)
+					insert into AzureSQLMaintenanceOverride values(NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- Adding command 1 out of 2 to execution ',1,null)
+					insert into AzureSQLMaintenanceOverride values(NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- Adding command 2 out of 2 to execution ',1,null)
 				*/
 		end
 
