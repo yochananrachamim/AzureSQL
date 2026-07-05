@@ -1,75 +1,181 @@
 import os
-import subprocess
+import re
+import pyodbc
 
-# Define your SQL Server connection details
-server = os.environ['MAINTENANCE_DB_CONNECTION_URL']
-database = os.environ['MAINTENANCE_DB_NAME']
-username = os.environ['GAS_DB_USERNAME']
-password = os.environ['GAS_DB_PASSWORD']
+from azure.identity import DefaultAzureCredential
 
-# creatating procedure in DB
-def procedure_execution_on_db(query_name):
-    try:
-        procedure_execution = subprocess.run(
-            query_name, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+SERVER = os.environ["MAINTENANCE_DB_CONNECTION_URL"]
+DATABASE = os.environ["MAINTENANCE_DB_NAME"]
 
-        if procedure_execution.returncode == 0:
-            print("Procedure has been executed successfully")
-        else:
-            print("Error Occured:")
-            print(procedure_execution.stderr)
-    except subprocess.CalledProcessError as e:
-        print("Error running sqlcmd command:")
-        print(e.stderr)
+SQL_FILE = "/app/AzureSQLMaintenance.sql"
 
+
+###########################################################
+# Managed Identity Login
+###########################################################
+def get_connection():
+
+    credential = DefaultAzureCredential()
+
+    token = credential.get_token(
+        "https://database.windows.net/.default"
+    ).token.encode("utf-16-le")
+
+    token_struct = len(token).to_bytes(4, "little") + token
+
+    SQL_COPT_SS_ACCESS_TOKEN = 1256
+
+    conn = pyodbc.connect(
+        f"Driver={{ODBC Driver 18 for SQL Server}};"
+        f"Server={SERVER};"
+        f"Database={DATABASE};"
+        "Encrypt=yes;"
+        "TrustServerCertificate=no;",
+        attrs_before={
+            SQL_COPT_SS_ACCESS_TOKEN: token_struct
+        },
+        autocommit=True,
+    )
+
+    return conn
+
+
+###########################################################
+# Consume remaining result sets
+###########################################################
+def consume_results(cursor):
+
+    while True:
+
+        try:
+
+            while cursor.nextset():
+                pass
+
+            break
+
+        except pyodbc.Error:
+
+            break
+
+
+###########################################################
+# Execute AzureSQLMaintenance.txt
+###########################################################
+def execute_sql_file(cursor, path):
+
+    print(f"Loading SQL file : {path}")
+
+    with open(path, encoding="utf-8") as f:
+        sql = f.read()
+
+    batches = re.split(
+        r"^\s*GO\s*$",
+        sql,
+        flags=re.MULTILINE,
+    )
+
+    batch_no = 1
+
+    for batch in batches:
+
+        batch = batch.strip()
+
+        if not batch:
+            continue
+
+        print(f"Executing batch {batch_no}")
+
+        cursor.execute(batch)
+
+        consume_results(cursor)
+
+        batch_no += 1
+
+    print("Procedure deployed successfully")
+
+
+###########################################################
+# Execute Query
+###########################################################
+def execute_query(cursor, query):
+
+    cursor.execute(query)
+
+    consume_results(cursor)
+
+
+###########################################################
+# Main
+###########################################################
 def main():
-    # Creating procedure in DB
-    procedure_creation_from_file = os.path.abspath("/app/AzureSQLMaintenance.txt")
-    creating_procedure_command = [
-        "/opt/mssql-tools/bin/sqlcmd",
-        "-S", server,
-        "-d", database,
-        "-U", username,
-        "-P", password,
-        "-i", procedure_creation_from_file,
-        "-t", "65534",
-        "-l", "60"
-    ]
-    print(f"Creating procedure in DB: for Server  {server} and db {database}")
-    procedure_execution_on_db(creating_procedure_command)
 
-    # Triggering maintenance procedure for indexes...
-    procedure_for_indexes = "exec [dbo].[AzureSQLMaintenance] @Operation='index',@mode='smart',@LogToTable=1"
-    triggering_procedure_index_command = [
-        "/opt/mssql-tools/bin/sqlcmd",
-        "-S", server,
-        "-d", database,
-        "-U", username,
-        "-P", password,
-        "-Q", procedure_for_indexes,
-        "-t", "65534",
-        "-l", "60"
-    ]
+    print("Starting Azure SQL Maintenance")
 
-    print(f"Triggering maintenance procedure for indexes on Server  {server} and db {database}")
-    procedure_execution_on_db(triggering_procedure_index_command)
+    conn = get_connection()
 
-    # Triggering maintenance procedure for statistics...
-    procedure_for_statistics = "exec [dbo].[AzureSQLMaintenance] @Operation='statistics',@mode='dummy' ,@LogToTable=1"
-    triggering_procedure_statistics_command = [
-        "/opt/mssql-tools/bin/sqlcmd",
-        "-S", server,
-        "-d", database,
-        "-U", username,
-        "-P", password,
-        "-Q", procedure_for_statistics,
-        "-t", "65534",
-        "-l", "60"
-    ]
+    cursor = conn.cursor()
 
-    print(f"Triggering maintenance procedure for statistics on Server  {server} and db {database}")
-    procedure_execution_on_db(triggering_procedure_statistics_command)
+    print(f"Connected to Server : {SERVER}")
+    print(f"Connected to Database : {DATABASE}")
+
+    cursor.execute("SELECT @@VERSION")
+
+    print(cursor.fetchone()[0])
+
+    print("\nCreating AzureSQLMaintenance Procedure")
+
+    execute_sql_file(cursor, SQL_FILE)
+
+    print("\nProcedure created successfully")
+
+    ###################################################
+    # Same sequence as old sqlcmd script
+    ###################################################
+
+    print("\nRunning Index Maintenance")
+
+    execute_query(
+        cursor,
+        """
+        EXEC AzureSQLMaintenance
+            @Operation='index',
+            @mode='smart',
+            @LogToTable=1
+        """,
+    )
+
+    print("Index Maintenance Completed")
+
+    print("\nRunning Statistics Maintenance")
+
+    execute_query(
+        cursor,
+        """
+        EXEC AzureSQLMaintenance
+            @Operation='statistics',
+            @mode='dummy',
+            @LogToTable=1
+        """,
+    )
+
+    print("Statistics Maintenance Completed")
+
+    cursor.close()
+
+    conn.close()
+
+    print("\nMaintenance Finished Successfully")
+
 
 if __name__ == "__main__":
 
-    main()
+    try:
+
+        main()
+
+    except Exception as ex:
+
+        print(f"\nMaintenance failed : {ex}")
+
+        raise

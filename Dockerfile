@@ -1,27 +1,34 @@
-# Use an official Python runtime as a parent image
-FROM python:3.8-slim
+FROM python:3.12-bookworm
 
-# Set the working directory to /app
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ACCEPT_EULA=Y
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        gnupg2 \
+        ca-certificates \
+        gcc \
+        g++ \
+        unixodbc \
+        unixodbc-dev && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | \
+        gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg && \
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+        > /etc/apt/sources.list.d/microsoft-prod.list && \
+    apt-get update && \
+    ACCEPT_EULA=Y apt-get install -y msodbcsql18 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Install the SQL Server tools (sqlcmd) and ODBC drivers
-RUN apt-get update \
-    && apt-get install -y curl \
-    && apt-get install -y gnupg \
-    && curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
-    && curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list > /etc/apt/sources.list.d/mssql-release.list \
-    && apt-get update \
-    && ACCEPT_EULA=Y apt-get install -y mssql-tools \
-    && apt-get install vim -y \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/
+COPY requirements.txt .
 
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+COPY maintenancefile.py .
+COPY AzureSQLMaintenance.sql .
 
-# Install any Python dependencies specified in requirements.txt
-#RUN pip install -r requirements.txt
-
-# Define the default command to run your Python script with sqlcmd
-CMD ["python", "maintenance.py"]
+CMD ["python","maintenance.py"]

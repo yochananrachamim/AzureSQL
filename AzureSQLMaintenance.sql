@@ -3,10 +3,20 @@
 /* For any issue or suggestion please email to: yocr@microsoft.com */
 /* 
 ***********************************************
-	Current Version Date: 2022-01-30
+	Current Version Date: 2026-03-22
 ***********************************************
 
 Change Log: 
+	2026-03-22 - Fix collation conflict if user database does not use the default collation (thanks to Naseem Abubaker, Sofia Silva and Sabrin Alsahsah for your help on this update) 
+	2025-11-04 - Add User Override options. (exclue or override the command or add extra command to maintenance operation) 
+	2024-09-23 - Avoid rebuil heaps on external tables as this is not needed and not possible.
+	2024-09-18 - Preserve xml compression in case this was used for the index.
+	2024-04-18 - Add internal variable to control SORT_IN_TEMPDB, change the way alter index command is being build to make it more flexible.
+	2023-07-13 - KB4551220 - skip resumable operation for indexes that has filter
+	2022-11-08 - Ignore table value functions for index maintenance Thanks to https://github.com/Mitch-Wheat for suggesting that
+	2022-10-06 - Fix help text that was mixed up, thanks Holger for pointing that out.
+	2022-10-03 - Add [whatif] as the first debug option, fix - do not skip stats for reorganize.
+	2022-04-25 - Set data type for @debug to nvarchar(10) as per comment I got from Paul McMillan - note that @debug is not in use at the moment.
 	2022-01-30 - As per comment from Tariq, removing dbo schema name from procedure and use user default.
 	2021-12-08 - Fix issue #19 on GitGub
 	2021-01-07
@@ -16,14 +26,14 @@ Change Log:
 if object_id('AzureSQLMaintenance') is null
 	exec('create procedure AzureSQLMaintenance as /*dummy procedure body*/ select 1;')	
 GO
-ALTER PROCEDURE [dbo].[AzureSQLMaintenance]
+ALTER PROCEDURE [AzureSQLMaintenance]
 	(
 		@operation nvarchar(10) = null,
 		@mode nvarchar(10) = 'smart',
 		@ResumableIndexRebuild bit = 0,
 		@RebuildHeaps bit = 0,
 		@LogToTable bit = 0,
-		@debug nvarchar = 'none'
+		@debug nvarchar(10) = 'off'
 	)
 as
 begin
@@ -46,13 +56,18 @@ begin
 	declare @indexStatsMode sysname;
 	declare @LowFragmentationBoundry int = 5;
 	declare @HighFragmentationBoundry int = 30;
-
+	declare @SORT_IN_TEMPDB bit = 1; /* 1=Activate SORT_IN_TEMPDB , 0= do not activate SORT_IN_TEMPDB  while rebuilding indexes */
+	
+	/*
+	Add your manual settings here
+	*/
+	
 	/* make sure parameters selected correctly */
 	set @operation = lower(@operation)
 	set @mode = lower(@mode)
-	set @debug = lower(@debug) /* any value at this time will produce the temp tables as permanent tables */
+	set @debug = lower(@debug) 
 	
-	if @mode not in ('smart','dummy')
+	if @mode not in ('smart','dummy') or @mode is null
 		set @mode = 'smart'
 
 	---------------------------------------------
@@ -73,25 +88,37 @@ begin
 		raiserror('     "dummy" going through all indexes and statistics regardless thier modifications or fragmentation.',0,0)
 		raiserror(' ',0,0)
 		raiserror('@ResumableIndexRebuild(bit) [optional]',0,0)
-		raiserror(' optionaly you can choose to rebuild indexes as resumable operation: ',0,0)
+		raiserror(' Optionaly you can choose to rebuild indexes as resumable operation: ',0,0)
 		raiserror('     "0" (Default) using non resumable index rebuild.',0,0)
 		raiserror('     "1" using resumable index rebuild when it is supported.',0,0)
-		raiserror(' ',0,0)
-		raiserror('@LogToTable(bit) [optional]',0,0)
-		raiserror(' Logging option: @LogToTable(bit)',0,0)
-		raiserror('     0 - (Default) do not log operation to table',0,0)
-		raiserror('     1 - log operation to table',0,0)
-		raiserror('		for logging option only 3 last execution will be kept by default. this can be changed by easily in the procedure body.',0,0)
-		raiserror('		Log table will be created automatically if not exists.',0,0)
 		raiserror(' ',0,0)
 		raiserror('@RebuildHeaps(bit) [optional]',0,0)
 		raiserror(' Rebuild HEAPS to fix forwarded records issue on tables with no clustered index',0,0)
 		raiserror('     0 - (Default) do not rebuild heaps',0,0)
 		raiserror('     1 - Rebuild heaps based on @mode parameter, @mode=dummy will rebuild all heaps',0,0)
 		raiserror(' ',0,0)
+		raiserror('@LogToTable(bit) [optional]',0,0)
+		raiserror(' Optionaly allows you to turn on logging ',0,0)
+		raiserror('     0 - (Default) do not log operation to table',0,0)
+		raiserror('     1 - log operation to table',0,0)
+		raiserror('		for logging option only 3 last execution will be kept by default. this can be changed by easily in the procedure body.',0,0)
+		raiserror('		Log table will be created automatically if not exists.',0,0)
+		raiserror(' ',0,0)
+		raiserror('@debug [optional]',0,0)
+		raiserror(' Allows debugging feature.',0,0)
+		raiserror('     off - (Default) debug option is off',0,0)
+		raiserror('     whatif - Remark all commands so it will not be executed, helps with understanding the commands to be executed',0,0)
+		raiserror('     * in any case debug is used there will be user tables created to help with reviewing the process. cmdQueue, idxBefore and statsBefore ',0,0)
+		raiserror(' ',0,0)
+		raiserror('User Override settings:',0,0)
+		raiserror('     You are allowed to averride the default behavior as follows ',0,0)
+		raiserror('       - add command to be executed in addition to the maintenance script',0,0)
+		raiserror('       - Exclude either whole schema, table, index or statistics from an operation',0,0)
+		raiserror('       - force command of your own, such as sample percent for stats update or specific index',0,0)
+		raiserror('     for more information about it open the code and go to line 145 to get some samples and available options.',0,0)
+		raiserror(' ',0,0)
 		raiserror('Example:',0,0)
 		raiserror('		exec  AzureSQLMaintenance ''all'', @LogToTable=1',0,0)
-
 	end
 	else 
 	begin
@@ -104,6 +131,62 @@ begin
 		if object_id('AzureSQLMaintenanceLog') is null and @LogToTable=1
 		begin
 			create table AzureSQLMaintenanceLog (id bigint primary key identity(1,1), OperationTime datetime2, command varchar(4000),ExtraInfo varchar(4000), StartTime datetime2, EndTime datetime2, StatusMessage varchar(1000));
+		end
+
+		/* Prepare User override table if not exists */
+		if object_id('AzureSQLMaintenanceOverride') is null
+		begin
+				create table AzureSQLMaintenanceOverride(
+					PK int identity primary key,
+					ApplyOnObjectType nvarchar(10) null, /* schema / table / index / statistics */
+					TableSchema sysname null,
+					TableName sysname null, 
+					IndexName sysname null, 
+					StatisticsName sysname null,
+					Operation nvarchar(10) null, /* index / statistics / Null */
+					OverrideName varchar(100) not null, /* Exclude / Manual / AddCommand */
+					AdditionalSettings varchar(max) null,
+					IsSample bit not null,
+					Remark varchar(1000) null
+					,constraint Add_Command_Cannot_Be_Applied_On_Object check( (lower(OverrideName) =lower('AddCommand') and ApplyOnObjectType is null ) or (ApplyOnObjectType is not null and lower(OverrideName) !=lower('AddCommand')) )
+					,constraint Cannot_Apply_Index_Operation_On_Statistics check(lower(Operation)!=lower('Index') OR (lower(Operation)=lower('Index') and StatisticsName is null ))
+					,constraint Cannot_Apply_Statistics_Operation_On_Index check(lower(Operation)!=lower('Statistics') OR (lower(Operation)=lower('Statistics') and IndexName is null ))
+					,constraint At_Schema_Level_Can_Only_Exclue check(lower(ApplyOnObjectType) != lower('Schema') or (lower(ApplyOnObjectType)=lower('Schema') and lower(OverrideName) =lower('Exclude')))
+					)
+
+				/*
+				Some sample configuration for user override. 
+
+				* note, a mistake in applying the override most likely to just be ignored, please make sure you test the settings to confirm it has been applied correctly. 
+				  below there are some samples you can use. 
+
+				insert into AzureSQLMaintenanceOverride
+					select NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- ReadMe',1,'Please read the below samples to understand better the options you can override '
+					union all select null,NULL,NULL,NULL,NULL,NULL,'AddCommand','SELECT 1',1,NULL
+					union all select 'Schema','dbo',NULL,NULL,NULL,'Index','exclude',NULL,1,NULL
+					union all select 'Schema','dbo',NULL,NULL,NULL,'Statistics','exclude',NULL,1,NULL
+					union all select 'Table','dbo','tab1',NULL,NULL,'Index','exclude',NULL,1,NULL
+					union all select 'Table','dbo','tab1',NULL,NULL,'Statistics','exclude',NULL,1,NULL
+					union all select 'Table','dbo','tab1',NULL,'stats1','Statistics','exclude',NULL,1,NULL
+					union all select 'Index','dbo','tab1','idx1',NULL,'Index','exclude',NULL,1,NULL
+					union all select 'Statistics','dbo','tab1',NULL,'stats1','Statistics','exclude',NULL,1,NULL
+					union all select 'Table','dbo','tab2',NULL,NULL,'Index','Manual',NULL,1,NULL
+					union all select 'Table','dbo','tab2',NULL,NULL,'Statistics','Manual',NULL,1,NULL
+					union all select 'Table','dbo','tab2',NULL,'stats2','Statistics','Manual',NULL,1,NULL
+					union all select 'Index','dbo','tab2','idx2',NULL,'Index','Manual',NULL,1,'Use commant template with place holders in curly braces such as: ALTER INDEX [{IndexName}] ON [{SchemaName}].[{TableName}] rebuild; '
+					union all select 'Statistics','dbo','tab2',NULL,'stats2','Statistics','Manual',NULL,1,NULL
+
+
+					insert into AzureSQLMaintenanceOverride values('Table','SalesLT','Customer',null,null,'Statistics','Manual','UPDATE STATISTICS [{SchemaName}].[{TableName}] ([{StatisticsName}]) WITH FULLSCAN; --manual row2',1,null)
+					insert into AzureSQLMaintenanceOverride values('Statistics','dbo','tab1',null,'idx1','Statistics','Manual','UPDATE STATISTICS [{SchemaName}].[{TableName}] ([{StatisticsName}]) WITH FULLSCAN; -- manual row 1',1,null)
+
+					insert into AzureSQLMaintenanceOverride values('Table','SalesLT','Customer',null,null,'Index','Manual','Alter index [{IndexName}] on [{SchemaName}].[{TableName}] rebuild;',1,null)
+					insert into AzureSQLMaintenanceOverride values('Index','dbo','tab1','idx1',null,'Index','Manual','Alter index [{IndexName}] on [{SchemaName}].[{TableName}] rebuild;',1,null)
+
+
+					insert into AzureSQLMaintenanceOverride values(NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- Adding command 1 out of 2 to execution ',1,null)
+					insert into AzureSQLMaintenanceOverride values(NULL,NULL,NULL,NULL,NULL,NULL,'AddCommand','-- Adding command 2 out of 2 to execution ',1,null)
+				*/
 		end
 
 		---------------------------------------------
@@ -158,6 +241,8 @@ begin
 		raiserror(@msg,0,0)
 		set @msg = 'set LogToTable = ' + cast(@LogToTable as varchar(1));
 		raiserror(@msg,0,0)
+		set @msg = 'set debug = ' + @debug;
+		raiserror(@msg,0,0)
 		raiserror('-----------------------',0,0)
 	end
 
@@ -202,11 +287,13 @@ begin
 		/* using inner join - this eliminates indexes that we cannot maintain such as indexes on functions */
 		select 
 			idxs.[object_id]
-			,ObjectSchema = OBJECT_SCHEMA_NAME(idxs.object_id)
-			,ObjectName = object_name(idxs.object_id) 
-			,IndexName = idxs.name
+			,ObjectSchema = OBJECT_SCHEMA_NAME(idxs.object_id) COLLATE database_default 
+			,ObjectName = object_name(idxs.object_id) COLLATE database_default 
+			,IndexName = idxs.name COLLATE database_default 
 			,idxs.type
 			,idxs.type_desc
+			,idxs.has_filter
+			,p.xml_compression 
 			,i.avg_fragmentation_in_percent
 			,i.page_count
 			,i.index_id
@@ -216,16 +303,28 @@ begin
 			,i.ghost_record_count
 			,i.forwarded_record_count
 			,null as OnlineOpIsNotSupported
-			,null as ObjectDoesNotSupportResumableOperation
+			,0 as ObjectDoesNotSupportResumableOperation
+			,cast(0 as bit) as SortInTempDB
+			,case when ps.data_space_id IS NULL then 0 else 1 end as IsPartitioned
+			,case when et.object_id is NULL then 0 else 1 end as IsExternalTable
 			,0 as SkipIndex
-			,replicate('',128) as SkipReason
+			,replicate(' ',20)  as OperationToTake 
+			,replicate(' ',128) as SkipReason
+			,0 as UserOverride
+			,replicate(' ',1024) as UserOverrideTemplate
 		into #idxBefore
-		from sys.indexes idxs
-		inner join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id
+		from sys.indexes idxs 
+		left join sys.partition_schemes ps ON idxs.data_space_id = ps.data_space_id
+		inner join sys.objects obj on idxs.object_id = obj.object_id
+		left join sys.partitions p on p.object_id = obj.object_id and p.index_id = idxs.index_id
+		left join sys.external_tables et on obj.object_id = et.object_id
+		inner join sys.dm_db_index_physical_stats(DB_ID(),NULL, NULL, NULL ,@indexStatsMode) i  on i.object_id = idxs.object_id and i.index_id = idxs.index_id and p.partition_number=i.partition_number
 		where idxs.type in (0 /*HEAP*/,1/*CLUSTERED*/,2/*NONCLUSTERED*/,5/*CLUSTERED COLUMNSTORE*/,6/*NONCLUSTERED COLUMNSTORE*/) 
 		and (alloc_unit_type_desc = 'IN_ROW_DATA' /*avoid LOB_DATA or ROW_OVERFLOW_DATA*/ or alloc_unit_type_desc is null /*for ColumnStore indexes*/)
 		and OBJECT_SCHEMA_NAME(idxs.object_id) != 'sys'
 		and idxs.is_disabled=0
+		and obj.type_desc != 'TF' /* Ignore table value functions */
+		and not exists (select * from sys.external_tables as et where et.object_id = obj.object_id) /* as added by alasdaircs to avoid external tables */
 		order by i.avg_fragmentation_in_percent desc, i.page_count desc
 				
 		-- mark indexes XML,spatial and columnstore not to run online update 
@@ -251,6 +350,11 @@ begin
 		from #idxBefore idx join sys.index_columns ic on idx.object_id = ic.object_id and idx.index_id=ic.index_id
 		join sys.columns c on ic.object_id=c.object_id and ic.column_id=c.column_id
 		where c.is_computed=1 or system_type_id=189 /*TimeStamp column*/
+
+		-- Disable resumable operation for indexes that has filter (filtered indexes) (KB4551220)
+		update idx set ObjectDoesNotSupportResumableOperation=1
+		from #idxBefore idx 
+		where idx.has_filter=1
 		
 		-- set SkipIndex=1 if conditions for maintenance are not met
 		-- this is used to idntify if stats need to be updated or not. 
@@ -279,6 +383,71 @@ begin
 							)
 				)
 				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
+
+		/***/
+		update #idxBefore set OperationToTake = 
+			case when
+			(
+				avg_fragmentation_in_percent between @LowFragmentationBoundry and @HighFragmentationBoundry and @mode = 'smart')/* index fragmentation condition */ 
+				or 
+				(@mode='dummy' and type in (5,6))/* Columnstore indexes in dummy mode -> reorganize them */
+			then
+				 'REORGANIZE'
+			else 
+				'REBUILD'
+			end
+
+		-- Choose when to do SORT_IN_TEMPDB, based on variable and if resumable operation is used as SORT_IN_TEMPDB is not supported for resumable operations.
+		update idx set SortInTempDB=1
+		from #idxBefore idx 
+		where 
+			(
+				/* Internal variable instrusts to use SORT_IN_TEMPDB and resumable operation was not activated*/
+				/* Resumable operation cannot use sort in tempDB as tempdb is nor persisted*/
+				@SORT_IN_TEMPDB=1 and @ResumableIndexRebuild = 0 
+			)
+
+		-- Apply User override settings for indexes at schema level. ***test***
+		update idx set SkipIndex=1, SkipReason='User override at schema level'
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='Schema' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Exclude'
+					and ovr.TableSchema = idx.ObjectSchema
+
+		-- Apply User override settings for indexes at table level. ***test***
+		update idx set SkipIndex=1, SkipReason='User override at table level'
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='Table' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Exclude'
+					and ovr.TableSchema = idx.ObjectSchema
+					and ovr.TableName = idx.ObjectName
+		
+		-- Apply User override settings for indexes at index level. ***test***
+		update idx set SkipIndex=1, SkipReason='User override at index level'
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='Index' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Exclude'
+					and ovr.TableSchema = idx.ObjectSchema
+					and ovr.TableName = idx.ObjectName
+					and ovr.IndexName = idx.IndexName
+		
+		-- Tag rows that has manual overrride so we can handle it differently later - This is for table level. ***test***
+		update idx set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+			on ovr.ApplyOnObjectType='table' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Manual'
+					and ovr.TableSchema = idx.ObjectSchema
+					and ovr.TableName = idx.ObjectName
+		
+		-- Tag rows that has manual overrride so we can handle it differently later - This is for index level. ***test***
+		update idx set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
+		from #idxBefore idx 
+			join AzureSQLMaintenanceOverride ovr 
+			on ovr.ApplyOnObjectType='Index' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Manual'
+					and ovr.TableSchema = idx.ObjectSchema
+					and ovr.TableName = idx.ObjectName
+					and ovr.IndexName = idx.IndexName
+
 
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Index Information:',0,0) with nowait
@@ -322,33 +491,39 @@ begin
 			set @idxIdentifierEnd = ']'
 		end
 
-			
+		/*Handle User Override for indexes*/
+		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
+		select 
+		txtCMD = REPLACE(REPLACE(REPLACE('/*User Override*/'+UserOverrideTemplate,'{TableName}',idx.ObjectName),'{SchemaName}',idx.ObjectSchema),'{IndexName}',idx.IndexName)
+		,ExtraInfo = 'User Override command'
+		from #idxBefore idx
+		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/ and UserOverride=1 /*User Override requested*/
+		
+
 		/* create queue for indexes */
 		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
 		select 
 		txtCMD = 'ALTER INDEX ' + @idxIdentifierBegin + IndexName + @idxIdentifierEnd + ' ON '+ @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' ' +
-		case when (
-					avg_fragmentation_in_percent between @LowFragmentationBoundry and @HighFragmentationBoundry and @mode = 'smart')/* index fragmentation condition */ 
-					or 
-					(@mode='dummy' and type in (5,6)/* Columnstore indexes in dummy mode -> reorganize them */
-				) then
-			 'REORGANIZE;'
-			when OnlineOpIsNotSupported=1 then
-			'REBUILD WITH(ONLINE=OFF,MAXDOP=1);'
-			when ObjectDoesNotSupportResumableOperation=1 or @ResumableIndexRebuildSupported=0 or @ResumableIndexRebuild=0 then
-			'REBUILD WITH(ONLINE=ON,MAXDOP=1);'
-			else
-			'REBUILD WITH(ONLINE=ON,MAXDOP=1, RESUMABLE=ON);'
-		end
-		, ExtraInfo = 
+		OperationToTake+ ' ' + 
+		case when IsPartitioned = 1 then 'PARTITION=' + CAST(partition_number AS varchar(10)) + ' ' else '' end +
+		case when OperationToTake='REBUILD' 
+			then 'WITH(MAXDOP=1'  + 
+			case when OnlineOpIsNotSupported=1 then ',ONLINE=OFF' else ',ONLINE=ON' end +
+			case when @ResumableIndexRebuild=1 and @ResumableIndexRebuildSupported=1 and ObjectDoesNotSupportResumableOperation=0 then ',RESUMABLE=ON' else '' end /*Default resumable is off so nothing is off - Thanks to mperdeck */ + 
+			case when SortInTempDB=1 then ',SORT_IN_TEMPDB=ON' else ',SORT_IN_TEMPDB=OFF' end +
+			case when xml_compression=1 then ',XML_COMPRESSION=ON' else '' end + 
+			')' 
+			else /* Operation is reoranize*/ '' end + 
+		';'
+		, ExtraInfo =
+			'Taking Action: ' + OperationToTake + ' ' + 
 			case when type in (5,6) then
-				'Dummy mode, reorganize columnstore indexes'
+				'Dummy mode therefore reorganize columnstore indexes'
 			else 
 				'Current fragmentation: ' + format(avg_fragmentation_in_percent/100,'p')+ ' with ' + cast(page_count as nvarchar(20)) + ' pages'
 			end
-		from #idxBefore
-		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/
-
+		from #idxBefore 	
+		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/ and UserOverride=0 /*No User Override*/
 
 		---------------------------------------------
 		--- Index - Heaps 
@@ -359,11 +534,13 @@ begin
 		begin
 			insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
 			select 
-			txtCMD = 'ALTER TABLE ' + @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' REBUILD;' 
+			txtCMD = 'ALTER TABLE ' + @idxIdentifierBegin + ObjectSchema + @idxIdentifierEnd +'.'+ @idxIdentifierBegin + ObjectName + @idxIdentifierEnd + ' REBUILD ' + 
+			case when IsPartitioned = 1 then 'PARTITION=' + CAST(partition_number AS varchar(10)) + ' ' else '' end + ';' 
 			, ExtraInfo = 'Rebuilding heap - forwarded records ' + cast(forwarded_record_count as varchar(100)) + ' out of ' + cast(record_count as varchar(100)) + ' record in the table'
-			from #idxBefore
+			from #idxBefore 
 			where
 				type = 0 /*heaps*/
+				and IsExternalTable=0 /*cannot rebuild external tables*/
 				and 
 					(
 						@mode='dummy' 
@@ -386,27 +563,30 @@ begin
 		/*Gets Stats for database*/
 		raiserror('Get statistics information...',0,0) with nowait;
 		select 
-			ObjectSchema = OBJECT_SCHEMA_NAME(s.object_id)
-			,ObjectName = object_name(s.object_id) 
+			ObjectSchema = OBJECT_SCHEMA_NAME(s.object_id) COLLATE database_default 
+			,ObjectName = object_name(s.object_id) COLLATE database_default 
 			,s.object_id
 			,s.stats_id
-			,StatsName = s.name
+			,StatsName = s.name COLLATE database_default 
 			,sp.last_updated
 			,sp.rows
 			,sp.rows_sampled
 			,sp.modification_counter
 			, i.type
 			, i.type_desc
-			,0 as SkipStatistics
+			,0 as SkipStatistics /* 0=do not skip, 1=skip unless user override, 2=skip anyway*/
+			,replicate(' ',128) as SkipReason
+			,0 as UserOverride
+			,replicate(' ',1024) as UserOverrideTemplate
 		into #statsBefore
 		from sys.stats s cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp 
 		left join sys.indexes i on sp.object_id = i.object_id and sp.stats_id = i.index_id
 		where OBJECT_SCHEMA_NAME(s.object_id) != 'sys' and /*Modified stats or Dummy mode*/(isnull(sp.modification_counter,0)>0 or @mode='dummy')
 		order by sp.last_updated asc
 
-		/*Remove statistics if it is handled by index rebuild / reorginize 
-		I am removing statistics based on existance on the index in the list because for indexes with <5% changes we do not apply
-		any action - therefore we might decide to update statistics */
+		/*Remove statistics if it is handled by index rebuild 
+		When index is rebuild we already update stats as part of the rebuild -> therefore I am skipping this index
+		for reorganize or for indexes with low fragmentation we do not update stats*/
 		if @operation= 'all'
 		update _stats set SkipStatistics=1 
 			from #statsBefore _stats
@@ -414,18 +594,59 @@ begin
 			on _idx.ObjectSchema = _stats.ObjectSchema
 			and _idx.ObjectName = _stats.ObjectName
 			and _idx.IndexName = _stats.StatsName 
-			where _idx.SkipIndex=0
+			where _idx.SkipIndex=0 and _idx.OperationToTake='REBUILD'
 
 		/*Skip statistics for Columnstore indexes*/
-		update #statsBefore set SkipStatistics=1
+		update #statsBefore set SkipStatistics=2
 		where type in (5,6) /*Column store indexes*/
 
 		/*Skip statistics if resumable operation is pause on the same object*/
 		if @ResumableIndexRebuildSupported=1
 		begin
-			update _stats set SkipStatistics=1
+			update _stats set SkipStatistics=2
 			from #statsBefore _stats join sys.index_resumable_operations iro on _stats.object_id=iro.object_id and _stats.stats_id=iro.index_id
 		end
+
+		-- Apply User override settings for Statistics at schema level. ***test***
+		update _stats set SkipStatistics=2, SkipReason='User override at schema level'
+		from #statsBefore _stats 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='schema' and ovr.IsSample=0 and ovr.Operation = 'Statistics' and ovr.OverrideName='exclude'
+					and ovr.TableSchema = _stats.ObjectSchema
+				
+		-- Apply User override settings for Statistics at table level. ***test***
+		update _stats set SkipStatistics=2, SkipReason='User override at table level'
+		from #statsBefore _stats 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='table' and ovr.IsSample=0 and ovr.Operation = 'Statistics' and ovr.OverrideName='exclude'
+					and ovr.TableSchema = _stats.ObjectSchema
+					and ovr.TableName = _stats.ObjectName
+		
+		-- Apply User override settings for Statistics at index level. ***test***
+		update _stats set SkipStatistics=2, SkipReason='User override at Statistics level'
+		from #statsBefore _stats 
+			join AzureSQLMaintenanceOverride ovr 
+				on ovr.ApplyOnObjectType='statistics' and ovr.IsSample=0 and ovr.Operation = 'Statistics' and ovr.OverrideName='exclude'
+					and ovr.TableSchema = _stats.ObjectSchema
+					and ovr.TableName = _stats.ObjectName
+					and ovr.StatisticsName = _stats.StatsName
+		
+		-- Tag rows that has manual overrride so we can handle it differently later - This is for table level. ***test***
+		update _stats set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
+		from #statsBefore _stats 
+			join AzureSQLMaintenanceOverride ovr 
+			on ovr.ApplyOnObjectType='table' and ovr.IsSample=0 and ovr.Operation='Statistics' and ovr.OverrideName='Manual'
+					and ovr.TableSchema = _stats.ObjectSchema
+					and ovr.TableName = _stats.ObjectName
+		
+		-- Tag rows that has manual overrride so we can handle it differently later - This is for index level. ***test***
+		update _stats set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
+		from #statsBefore _stats 
+		join AzureSQLMaintenanceOverride ovr 
+			on ovr.ApplyOnObjectType='Statistics' and ovr.IsSample=0 and ovr.Operation='Statistics' and ovr.OverrideName='Manual'
+					and ovr.TableSchema = _stats.ObjectSchema
+					and ovr.TableName = _stats.ObjectName
+					and ovr.StatisticsName = _stats.StatsName
 		
 		raiserror('---------------------------------------',0,0) with nowait
 		raiserror('Statistics Information:',0,0) with nowait
@@ -459,6 +680,15 @@ begin
 			set @statsIdentifierEnd = ']'
 		end
 		
+		/*Handle User Override for Statistics objects*/
+		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
+		select 
+		txtCMD = REPLACE(REPLACE(REPLACE('/*User Override*/'+UserOverrideTemplate,'{TableName}',_stats.ObjectName),'{SchemaName}',_stats.ObjectSchema),'{StatisticsName}',_stats.StatsName)
+		,ExtraInfo = 'User Override statistics update command'
+		from #statsBefore _stats
+		where SkipStatistics in (0,1 /*exclude 2*/) and UserOverride=1 /*User Override requested*/
+
+
 		/* create queue for update stats */
 		insert into AzureSQLMaintenanceCMDQueue(txtCMD,ExtraInfo)
 		select 
@@ -475,17 +705,25 @@ begin
 		declare @ID int;
 		declare @ExtraInfo nvarchar(max);
 	
-		/*Print debug information in case debug is activated */
-		if @debug!='none'
+		/*handle debug options*/
+		if @debug!='off'
 		begin
+			
+			/*When whatif is used remark all commands*/
+			if @debug='whatif' 
+			begin
+				update AzureSQLMaintenanceCMDQueue set txtCMD = '--' + txtCMD
+			end
+			
+			/*keep debug table snapshot*/
 			drop table if exists idxBefore
 			drop table if exists statsBefore
 			drop table if exists cmdQueue
 			if object_id('tempdb..#idxBefore') is not null select * into idxBefore from #idxBefore
 			if object_id('tempdb..#statsBefore') is not null select * into statsBefore from #statsBefore
-			if object_id('tempdb..AzureSQLMaintenanceCMDQueue') is not null select * into cmdQueue from AzureSQLMaintenanceCMDQueue
+			if object_id('AzureSQLMaintenanceCMDQueue') is not null select * into cmdQueue from AzureSQLMaintenanceCMDQueue
 		end
-
+		
 		/*Save current execution parameters in case resume is needed */
 		if @operation!='resume'
 		begin
@@ -494,6 +732,14 @@ begin
 			insert into AzureSQLMaintenanceCMDQueue(ID,txtCMD,ExtraInfo) values(-1,'parameters to be used by resume code path',@ExtraInfo)
 			set identity_insert AzureSQLMaintenanceCMDQueue off
 		end
+
+		if @operation in('statistics','index','all')
+		begin
+			/*Add extra command from User override */
+			insert into AzureSQLMaintenanceCMDQueue 
+			select AdditionalSettings, 'User Added Command' from AzureSQLMaintenanceOverride where OverrideName='AddCommand' and IsSample=0
+		end
+
 	
 		---------------------------------------------
 		--- Executing commands
