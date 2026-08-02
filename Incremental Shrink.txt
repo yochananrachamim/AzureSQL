@@ -86,7 +86,7 @@ Begin
 		set @iCurrentSizeTarget = @AllocatedSpaceMB-@ShrinkChunkSize
 		set @iCurrentSizeTarget = iif(@iCurrentSizeTarget>0, @iCurrentSizeTarget,0)
 
-		set @sqlCMD = N'dbcc shrinkfile('+cast(@iFileID as varchar(7))+','+ convert(nvarchar,@iCurrentSizeTarget) +') with no_infomsgs;'
+		set @sqlCMD = N'dbcc shrinkfile('+cast(@iFileID as varchar(7))+','+ convert(nvarchar,@iCurrentSizeTarget) +') with WAIT_AT_LOW_PRIORITY (ABORT_AFTER_WAIT = SELF);'
 		--print @sqlCMD
 		exec(@sqlCMD)
 
