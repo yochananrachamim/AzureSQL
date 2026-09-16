@@ -1,3 +1,5 @@
+
+
 /*
 
 It is recommended to use ShrinkDriver from SQL Server samples created and shared by SQL Server product team 
@@ -7,6 +9,19 @@ This procedure will not be updated anymore.
 Thank you for chosing to use my incremental shrink stored procedure. 
 
 */
+
+
+
+
+
+
+
+
+
+
+
+
+
 CREATE OR ALTER PROCEDURE usp_IncrementalShrink
 @DesiredFileSize int=0,
 @ShrinkChunkSize int=5,
