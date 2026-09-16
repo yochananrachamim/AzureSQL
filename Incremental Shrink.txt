@@ -1,3 +1,12 @@
+/*
+
+It is recommended to use ShrinkDriver from SQL Server samples created and shared by SQL Server product team 
+https://github.com/microsoft/sql-server-samples/tree/master/samples/features/shrink/shrink-driver
+
+This procedure will not be updated anymore. 
+Thank you for chosing to use my incremental shrink stored procedure. 
+
+*/
 CREATE OR ALTER PROCEDURE usp_IncrementalShrink
 @DesiredFileSize int=0,
 @ShrinkChunkSize int=5,
@@ -9,6 +18,7 @@ Incremental Shrink for data file - SQL Server, Azure SQL, Azure Managed Instance
 ************************************************/
 /*-------------------------------------------------
 Change Log: 
+	2026-08-16 - It is recommended to use ShrinkDriver from SQL Server Samples created by SQL Server product team. 
 	2022-07-12 - Change it from script to stored procedure
 		- Add functionality to go through all data files
 	2022-07-06 - more accurate current size validation.
@@ -30,7 +40,7 @@ declare @iCurrentSizeTarget int
 
 
 set @MSG = convert(nvarchar,getdate())+' - Starting incremental shrink procedure'; raiserror(@msg,0,0) with nowait
-
+set @MSG = convert(nvarchar,getdate())+' - Note: This procedure is not maintained anymore, please use ShrinkDriver instead - see SQL Code for link to access it'; raiserror(@msg,0,0) with nowait
 
 /* @dbFileID=0 -> All Files, or actual data file ID */
 insert into @iFileList select file_id from sys.database_files where type=0/*Rows*/ and (@dbFileID=0 or file_id=@dbFileID)
@@ -101,5 +111,6 @@ Begin
 End 
 
 set @MSG = convert(nvarchar,getdate())+' - Finished incremental shrink procedure'; raiserror(@msg,0,0) with nowait
+set @MSG = convert(nvarchar,getdate())+' - Note: This procedure is not maintained anymore, please use ShrinkDriver instead - see SQL Code for link to access it'; raiserror(@msg,0,0) with nowait
 END
 
