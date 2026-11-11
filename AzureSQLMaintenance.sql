@@ -39,9 +39,9 @@ as
 begin
 	set nocount on;
 	
-	---------------------------------------------
-	--- Varialbles and pre conditions check
-	---------------------------------------------
+	/*################################################################*/
+	/*### Varialbles and pre conditions check ########################*/
+	/*################################################################*/
 
 	set quoted_identifier on;
 	declare @idxIdentifierBegin char(1), @idxIdentifierEnd char(1);
@@ -70,9 +70,9 @@ begin
 	if @mode not in ('smart','dummy') or @mode is null
 		set @mode = 'smart'
 
-	---------------------------------------------
-	--- Begin
-	---------------------------------------------
+	/*################################################################*/
+	/*### Begin ######################################################*/
+	/*################################################################*/
 
 	if @operation not in ('index','statistics','all') or @operation is null
 	begin
@@ -123,9 +123,9 @@ begin
 	else 
 	begin
 		
-		---------------------------------------------
-		--- Prepare log table
-		---------------------------------------------
+		/*################################################################*/
+		/*### Prepare log table ##########################################*/
+		/*################################################################*/
 
 		/* Prepare Log Table */
 		if object_id('AzureSQLMaintenanceLog') is null and @LogToTable=1
@@ -189,9 +189,9 @@ begin
 				*/
 		end
 
-		---------------------------------------------
-		--- Resume operation
-		---------------------------------------------
+		/*################################################################*/
+		/*### Resume operation ###########################################*/
+		/*################################################################*/
 
 		/*Check is there is operation to resume*/
 		if OBJECT_ID('AzureSQLMaintenanceCMDQueue') is not null 
@@ -200,9 +200,9 @@ begin
 				/*resume information exists*/ exists(select * from AzureSQLMaintenanceCMDQueue where ID=-1) 
 			begin
 				/*resume operation confirmed*/
-				set @operation='resume' -- set operation to resume, this can only be done by the proc, cannot get this value as parameter
+				set @operation='resume' /* set operation to resume, this can only be done by the proc, cannot get this value as parameter */
 
-				-- restore operation parameters 
+				/* restore operation parameters */
 				select top 1
 				@LogToTable = JSON_VALUE(ExtraInfo,'$.LogToTable')
 				,@mode = JSON_VALUE(ExtraInfo,'$.mode')
@@ -217,17 +217,17 @@ begin
 			end
 			else
 				begin
-					-- table [AzureSQLMaintenanceCMDQueue] exist but resume information does not exists
-					-- this might happen in case execution intrupted between collecting index & ststistics information and executing commands.
-					-- to fix that we drop the table now, it will be recreated later 
+					/* table [AzureSQLMaintenanceCMDQueue] exist but resume information does not exists */
+					/* this might happen in case execution intrupted between collecting index & ststistics information and executing commands. */
+					/* to fix that we drop the table now, it will be recreated later */
 					DROP TABLE [AzureSQLMaintenanceCMDQueue];
 				end
 		end
 
 
-		---------------------------------------------
-		--- Report operation parameters
-		---------------------------------------------
+		/*################################################################*/
+		/*### Report operation parameters ################################*/
+		/*################################################################*/
 		
 		/*Write operation parameters*/
 		raiserror('-----------------------',0,0)
@@ -248,13 +248,13 @@ begin
 
 	if @LogToTable=1 insert into AzureSQLMaintenanceLog values(@OperationTime,null,null,sysdatetime(),sysdatetime(),'Starting operation: Operation=' +@operation + ' Mode=' + @mode + ' Keep log for last ' + cast(@KeepXOperationInLog as varchar(10)) + ' operations' )	
 
-	-- create command queue table, if there table exits then we resume operation in earlier stage.
+	/* create command queue table, if there table exits then we resume operation in earlier stage. */
 	if @operation!='resume'
 		create table AzureSQLMaintenanceCMDQueue (ID int identity primary key,txtCMD nvarchar(max),ExtraInfo varchar(max))
 
-	---------------------------------------------
-	--- Check if engine support resumable index operation
-	---------------------------------------------
+	/*################################################################*/
+	/*### Check if engine support resumable index operation ##########*/
+	/*################################################################*/
 	if @ResumableIndexRebuild=1 
 	begin
 		if cast(SERVERPROPERTY('EngineEdition')as int)>=5 or cast(SERVERPROPERTY('ProductMajorVersion')as int)>=14
@@ -271,9 +271,9 @@ begin
 	end
 
 
-	---------------------------------------------
-	--- Index maintenance
-	---------------------------------------------
+	/*################################################################*/
+	/*### Index maintenance ##########################################*/
+	/*################################################################*/
 	if @operation in('index','all')
 	begin
 		/**/
@@ -327,10 +327,10 @@ begin
 		and not exists (select * from sys.external_tables as et where et.object_id = obj.object_id) /* as added by alasdaircs to avoid external tables */
 		order by i.avg_fragmentation_in_percent desc, i.page_count desc
 				
-		-- mark indexes XML,spatial and columnstore not to run online update 
+		/* mark indexes XML,spatial and columnstore not to run online update */
 		update #idxBefore set OnlineOpIsNotSupported=1 where [object_id] in (select [object_id] from #idxBefore where [type]=3 /*XML Indexes*/)
 
-		-- mark clustered indexes for tables with 'text','ntext','image' to rebuild offline
+		/* mark clustered indexes for tables with 'text','ntext','image' to rebuild offline */
 		update #idxBefore set OnlineOpIsNotSupported=1 
 		where index_id=1 /*clustered*/ and [object_id] in (
 			select object_id
@@ -338,27 +338,27 @@ begin
 			where t.name in ('text','ntext','image')
 		)
 	
-		-- do all as offline for box edition that does not support online
+		/* do all as offline for box edition that does not support online */
 		update #idxBefore set OnlineOpIsNotSupported=1  
 			where /* Editions that does not support online operation in case this has been used with on-prem server */
 				convert(varchar(100),serverproperty('Edition')) like '%Express%' 
 				or convert(varchar(100),serverproperty('Edition')) like '%Standard%'
 				or convert(varchar(100),serverproperty('Edition')) like '%Web%'
 		
-		-- Do non resumable operation when index contains computed column or timestamp data type
+		/* Do non resumable operation when index contains computed column or timestamp data type */
 		update idx set ObjectDoesNotSupportResumableOperation=1
 		from #idxBefore idx join sys.index_columns ic on idx.object_id = ic.object_id and idx.index_id=ic.index_id
 		join sys.columns c on ic.object_id=c.object_id and ic.column_id=c.column_id
 		where c.is_computed=1 or system_type_id=189 /*TimeStamp column*/
 
-		-- Disable resumable operation for indexes that has filter (filtered indexes) (KB4551220)
+		/* Disable resumable operation for indexes that has filter (filtered indexes) (KB4551220) */
 		update idx set ObjectDoesNotSupportResumableOperation=1
 		from #idxBefore idx 
 		where idx.has_filter=1
 		
-		-- set SkipIndex=1 if conditions for maintenance are not met
-		-- this is used to idntify if stats need to be updated or not. 
-		-- Check#1 - if table is too small
+		/* set SkipIndex=1 if conditions for maintenance are not met */
+		/* this is used to idntify if stats need to be updated or not. */
+		/* Check#1 - if table is too small */
 		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as table is too small'
 		where (
 					/*Table is small*/
@@ -366,7 +366,7 @@ begin
 				)
 				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
 		
-		-- Check#2 - if table is not small and fragmentation % is too low 
+		/* Check#2 - if table is not small and fragmentation % is too low */
 		update #idxBefore set SkipIndex=1,SkipReason='Maintenance is not needed as fragmentation % is low'
 		where (
 					/*Table is big enough - but fragmentation is less than 5%*/
@@ -374,7 +374,7 @@ begin
 				)
 				and @mode != 'dummy' /*for Dummy mode we do not want to skip anything */
 		
-		-- Skip columnstore indexes
+		/* Skip columnstore indexes */
 		update #idxBefore set SkipIndex=1,SkipReason='Columnstore index'
 		where (
 					type in (
@@ -397,7 +397,7 @@ begin
 				'REBUILD'
 			end
 
-		-- Choose when to do SORT_IN_TEMPDB, based on variable and if resumable operation is used as SORT_IN_TEMPDB is not supported for resumable operations.
+		/* Choose when to do SORT_IN_TEMPDB, based on variable and if resumable operation is used as SORT_IN_TEMPDB is not supported for resumable operations. */
 		update idx set SortInTempDB=1
 		from #idxBefore idx 
 		where 
@@ -407,14 +407,14 @@ begin
 				@SORT_IN_TEMPDB=1 and @ResumableIndexRebuild = 0 
 			)
 
-		-- Apply User override settings for indexes at schema level. ***test***
+		/* Apply User override settings for indexes at schema level. ***test*** */
 		update idx set SkipIndex=1, SkipReason='User override at schema level'
 		from #idxBefore idx 
 			join AzureSQLMaintenanceOverride ovr 
 				on ovr.ApplyOnObjectType='Schema' and ovr.IsSample=0 and ovr.Operation='Index' and ovr.OverrideName='Exclude'
 					and ovr.TableSchema = idx.ObjectSchema
 
-		-- Apply User override settings for indexes at table level. ***test***
+		/* Apply User override settings for indexes at table level. ***test*** */
 		update idx set SkipIndex=1, SkipReason='User override at table level'
 		from #idxBefore idx 
 			join AzureSQLMaintenanceOverride ovr 
@@ -422,7 +422,7 @@ begin
 					and ovr.TableSchema = idx.ObjectSchema
 					and ovr.TableName = idx.ObjectName
 		
-		-- Apply User override settings for indexes at index level. ***test***
+		/* Apply User override settings for indexes at index level. ***test*** */
 		update idx set SkipIndex=1, SkipReason='User override at index level'
 		from #idxBefore idx 
 			join AzureSQLMaintenanceOverride ovr 
@@ -431,7 +431,7 @@ begin
 					and ovr.TableName = idx.ObjectName
 					and ovr.IndexName = idx.IndexName
 		
-		-- Tag rows that has manual overrride so we can handle it differently later - This is for table level. ***test***
+		/* Tag rows that has manual overrride so we can handle it differently later - This is for table level. ***test*** */
 		update idx set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
 		from #idxBefore idx 
 			join AzureSQLMaintenanceOverride ovr 
@@ -439,7 +439,7 @@ begin
 					and ovr.TableSchema = idx.ObjectSchema
 					and ovr.TableName = idx.ObjectName
 		
-		-- Tag rows that has manual overrride so we can handle it differently later - This is for index level. ***test***
+		/* Tag rows that has manual overrride so we can handle it differently later - This is for index level. ***test*** */
 		update idx set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
 		from #idxBefore idx 
 			join AzureSQLMaintenanceOverride ovr 
@@ -525,9 +525,9 @@ begin
 		from #idxBefore 	
 		where SkipIndex=0 and type != 0 /*Avoid HEAPS*/ and UserOverride=0 /*No User Override*/
 
-		---------------------------------------------
-		--- Index - Heaps 
-		---------------------------------------------
+		/*################################################################*/
+		/*### Index - Heaps ##############################################*/
+		/*################################################################*/
 
 		/* create queue for heaps */
 		if @RebuildHeaps=1 
@@ -554,9 +554,9 @@ begin
 
 
 
-	---------------------------------------------
-	--- Statistics maintenance
-	---------------------------------------------
+	/*################################################################*/
+	/*### Statistics maintenance #####################################*/
+	/*################################################################*/
 
 	if @operation in('statistics','all')
 	begin 
@@ -607,14 +607,14 @@ begin
 			from #statsBefore _stats join sys.index_resumable_operations iro on _stats.object_id=iro.object_id and _stats.stats_id=iro.index_id
 		end
 
-		-- Apply User override settings for Statistics at schema level. ***test***
+		/* Apply User override settings for Statistics at schema level. ***test*** */
 		update _stats set SkipStatistics=2, SkipReason='User override at schema level'
 		from #statsBefore _stats 
 			join AzureSQLMaintenanceOverride ovr 
 				on ovr.ApplyOnObjectType='schema' and ovr.IsSample=0 and ovr.Operation = 'Statistics' and ovr.OverrideName='exclude'
 					and ovr.TableSchema = _stats.ObjectSchema
 				
-		-- Apply User override settings for Statistics at table level. ***test***
+		/* Apply User override settings for Statistics at table level. ***test*** */
 		update _stats set SkipStatistics=2, SkipReason='User override at table level'
 		from #statsBefore _stats 
 			join AzureSQLMaintenanceOverride ovr 
@@ -622,7 +622,7 @@ begin
 					and ovr.TableSchema = _stats.ObjectSchema
 					and ovr.TableName = _stats.ObjectName
 		
-		-- Apply User override settings for Statistics at index level. ***test***
+		/* Apply User override settings for Statistics at index level. ***test*** */
 		update _stats set SkipStatistics=2, SkipReason='User override at Statistics level'
 		from #statsBefore _stats 
 			join AzureSQLMaintenanceOverride ovr 
@@ -631,7 +631,7 @@ begin
 					and ovr.TableName = _stats.ObjectName
 					and ovr.StatisticsName = _stats.StatsName
 		
-		-- Tag rows that has manual overrride so we can handle it differently later - This is for table level. ***test***
+		/* Tag rows that has manual overrride so we can handle it differently later - This is for table level. ***test*** */
 		update _stats set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
 		from #statsBefore _stats 
 			join AzureSQLMaintenanceOverride ovr 
@@ -639,7 +639,7 @@ begin
 					and ovr.TableSchema = _stats.ObjectSchema
 					and ovr.TableName = _stats.ObjectName
 		
-		-- Tag rows that has manual overrride so we can handle it differently later - This is for index level. ***test***
+		/* Tag rows that has manual overrride so we can handle it differently later - This is for index level. ***test*** */
 		update _stats set UserOverride=1, UserOverrideTemplate = ovr.AdditionalSettings
 		from #statsBefore _stats 
 		join AzureSQLMaintenanceOverride ovr 
@@ -741,9 +741,9 @@ begin
 		end
 
 	
-		---------------------------------------------
-		--- Executing commands
-		---------------------------------------------
+		/*################################################################*/
+		/*### Executing commands #########################################*/
+		/*################################################################*/
 		/*
 		needed to rebuild indexes on comuted columns
 		if ANSI_WARNINGS is set to OFF we might get the followin exception:
@@ -776,9 +776,9 @@ begin
 		drop table AzureSQLMaintenanceCMDQueue;
 	end
 	
-	---------------------------------------------
-	--- Clean old records from log table
-	---------------------------------------------
+	/*################################################################*/
+	/*### Clean old records from log table ###########################*/
+	/*################################################################*/
 	if @LogToTable=1
 	begin
 		delete from AzureSQLMaintenanceLog 
